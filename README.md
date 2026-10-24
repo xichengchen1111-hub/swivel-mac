@@ -2,6 +2,17 @@
 
 A native, local file toolkit for macOS. Drag any file, tap a key, and drop it on the wheel that appears under your cursor.
 
+## Download · 下载
+
+| Your computer · 你的电脑 | Download · 下载 |
+| --- | --- |
+| **Mac** — macOS 15 or later, Apple silicon (M1 or newer) · Apple 芯片 | **[⬇ Download for Mac · 下载 Mac 版](https://github.com/xichengchen1111-hub/swivel-mac/releases/latest/download/Swivel-mac.zip)** |
+| **Windows** | Preview in progress, not available yet · 预览版准备中，暂不提供下载 |
+
+Not sure which Mac you have? Apple menu → About This Mac: "Chip: Apple M…" means Apple silicon. On an Intel Mac, build it yourself (see below). Older versions are on the [Releases](https://github.com/xichengchen1111-hub/swivel-mac/releases) page.
+
+不确定是哪种 Mac？点左上角苹果菜单 →「关于本机」，「芯片」写着 Apple M… 就是 Apple 芯片。
+
 | Key while dragging | Wheel |
 | --- | --- |
 | ⇧ Shift | **Convert** formats |
@@ -26,7 +37,7 @@ Media processing runs locally, using macOS frameworks (Core ML, Vision, ImageIO,
 
 Requires macOS 15 or later. The prebuilt download is for Apple silicon Macs; on an Intel Mac, build it yourself (below). Some features need macOS 26.
 
-1. Download `Swivel-<version>.zip` from [Releases](../../releases) and unzip it.
+1. Download **Swivel-mac.zip** (link above) and unzip it.
 2. Move `Swivel.app` to Applications.
 3. The app is ad-hoc signed, not notarized by Apple. The first time, Control-click it and choose **Open**, or go to System Settings → Privacy & Security and click **Open Anyway**.
 
