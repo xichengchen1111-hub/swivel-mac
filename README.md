@@ -13,6 +13,8 @@ Not sure which Mac you have? Apple menu → About This Mac: "Chip: Apple M…" m
 
 不确定是哪种 Mac？点左上角苹果菜单 →「关于本机」，「芯片」写着 Apple M… 就是 Apple 芯片。
 
+**First time opening it?** macOS will block it once — see [step 4 below](#download-and-install). · **第一次打开被拦？** 看下面的[安装第 4 步](#download-and-install)。
+
 | Key while dragging | Wheel |
 | --- | --- |
 | ⇧ Shift | **Convert** formats |
@@ -39,7 +41,10 @@ Requires macOS 15 or later. The prebuilt download is for Apple silicon Macs; on 
 
 1. Download **Swivel-mac.zip** (link above) and unzip it.
 2. Move `Swivel.app` to Applications.
-3. The app is ad-hoc signed, not notarized by Apple. The first time, Control-click it and choose **Open**, or go to System Settings → Privacy & Security and click **Open Anyway**.
+3. Open it once. Swivel isn't notarized by Apple yet, so macOS says it can't verify it ("Apple could not verify…"): click **Done** (not Move to Trash).
+4. Open **System Settings → Privacy & Security**, scroll down to *"Swivel" was blocked*, click **Open Anyway** and confirm with your password. You only do this once.
+
+   第一次打开时 macOS 会提示「Apple 无法验证 "Swivel"…」：点 **完成**（不要点「移到废纸篓」），然后打开 **系统设置 → 隐私与安全性**，滚到最下面，在「已阻止使用 "Swivel"」旁点 **仍要打开**，输入密码确认。只需要做一次。（macOS 15 起，按住 Control 点「打开」已经不能绕过这个提示。）
 
 To build it yourself instead, install the Xcode Command Line Tools and run `./build.sh` (the app appears in `build/Swivel.app`); `./test.sh` runs the automated checks.
 
