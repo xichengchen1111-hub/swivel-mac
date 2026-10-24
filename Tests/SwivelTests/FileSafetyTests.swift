@@ -342,7 +342,7 @@ struct FileSafetyTests {
         try Data("keep".utf8).write(to: source)
         let good = try await Archives.zip([source]), bad = dir.appendingPathComponent("bad.zip")
         try Data("not an archive".utf8).write(to: bad)
-        let tools = MCPTools(history: MCPHistory(directory: dir.appendingPathComponent("history")), trash: { try fm.removeItem(at: $0) })
+        let tools = MCPTools(history: MCPHistory(directory: dir.appendingPathComponent("history")), trash: { try fm.removeItem(at: $0); return nil })
         let plan = try await tools.call("plan_action", ["action": "convert.Extract", "paths": [good.path, bad.path]])
         let result = try await tools.call("apply_plan", ["plan_id": try #require(plan["plan_id"] as? String)])
         let created = try #require(result["created"] as? [String])

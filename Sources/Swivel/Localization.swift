@@ -175,17 +175,9 @@ enum Strings {
         // Upscale
         "Upscale": ["放大", "放大", "拡大"],
         "Scale": ["倍率", "倍率", "倍率"],
-        "AI upscaling is not supported on this Mac.": ["此 Mac 不支持 AI 放大。", "此 Mac 不支援 AI 放大。", "この Mac は AI 拡大に対応していません。"],
-        "AI upscaling input is limited to %@. Choose a smaller file.": ["AI 放大的输入尺寸上限为 %@，请选择更小的文件。", "AI 放大的輸入尺寸上限為 %@，請選擇更小的檔案。", "AI 拡大の入力上限は %@ です。小さいファイルを選んでください。"],
-        "These dimensions or this scale are not supported by the system upscaler.": ["系统放大功能不支持此尺寸或倍率。", "系統放大功能不支援此尺寸或倍率。", "システムの拡大機能はこのサイズや倍率に対応していません。"],
-        "Upscaling resources are not installed.": ["尚未安装放大资源。", "尚未安裝放大資源。", "拡大リソースがインストールされていません。"],
         "Couldn't allocate an upscaling frame.": ["无法分配放大处理所需的帧。", "無法配置放大處理所需的影格。", "拡大用フレームを確保できませんでした。"],
         "The enlarged image would be too large.": ["放大后的图片过大。", "放大後的圖片過大。", "拡大後の画像が大きすぎます。"],
         "Couldn't render": ["无法渲染", "無法算繪", "描画できませんでした"],
-        "AI upscaling uses Apple's on-device model.": ["AI 放大使用 Apple 的本机模型。", "AI 放大使用 Apple 的本機模型。", "AI 拡大には Apple のオンデバイスモデルを使います。"],
-        "Ordinary Lanczos enlargement. AI upscaling requires macOS 26.": ["普通 Lanczos 放大。AI 放大需要 macOS 26。", "一般 Lanczos 放大。AI 放大需要 macOS 26。", "通常の Lanczos 拡大です。AI 拡大には macOS 26 が必要です。"],
-        "Download upscaling resources?": ["下载放大资源？", "下載放大資源？", "拡大リソースをダウンロードしますか？"],
-        "Apple needs to download an upscaling model once. Your files stay on this Mac.": ["Apple 首次使用时需要下载放大模型，文件保留在本机。", "Apple 首次使用時需要下載放大模型，檔案保留在本機。", "初回のみ Apple の拡大モデルをダウンロードします。ファイルはこの Mac 上に残ります。"],
 
         // Local transcription and subtitles
         "Subtitles": ["字幕", "字幕", "字幕"],
@@ -317,7 +309,6 @@ enum Strings {
         "Create a code from a link or text, or import an image containing a QR code. Your saved codes will appear here as trees.": ["输入网址或文字创建二维码，也可以导入含二维码的图片。保存后，这里就会长出你的二维码树。", "輸入網址或文字建立 QR 碼，也可匯入含 QR 碼的圖片。儲存後會在這裡顯示為樹。", "リンクやテキストから作成するか、QR コードの画像を読み込んでください。保存したコードが木になって表示されます。"],
         "No matching codes": ["没有匹配的二维码", "沒有符合的 QR 碼", "一致するコードはありません"],
         "Try another search, or add a new code.": ["试试其他搜索内容，或新建二维码。", "請嘗試其他搜尋內容，或新增 QR 碼。", "別の言葉で検索するか、新しいコードを追加してください。"],
-        "Choose which apps appear in the Apps wheel. Add an app, choose a delivery method and optionally limit its file extensions.": ["选择应用圆盘中显示的 App，设置打开方式，也可以限制文件扩展名。", "選擇 App 圓盤中顯示的 App、開啟方式，也可限制副檔名。", "アプリホイールに表示するアプリと受け渡し方法を選択。拡張子も指定できます。"],
         "Choose an installed app…": ["选择已安装的应用…", "選取已安裝的 App…", "インストール済みのアプリを選択…"],
         "Scan QR": ["识别二维码", "辨識 QR 碼", "QR 読み取り"],
         "Next Page": ["下一页", "下一頁", "次のページ"],
@@ -422,7 +413,6 @@ enum Strings {
         "Files copied. Paste them in %@.": ["文件已复制，请在 %@ 中粘贴。", "檔案已複製，請在 %@ 中貼上。", "ファイルをコピーしました。%@ に貼り付けてください。"],
         "Opened files in %@": ["已用 %@ 打开文件", "已用 %@ 開啟檔案", "%@ でファイルを開きました"],
         "Your files, your apps": ["你的文件，你的应用", "你的檔案，你的 App", "ファイルに合わせてアプリを選ぶ"],
-        "Choose which apps appear in the Wheel’s Actions menu. Add an app, choose a delivery method and optionally limit its file extensions.": ["设置轮盘里显示的应用，选择交接方式，也可限制文件扩展名。", "設定輪盤中顯示的 App，選擇交接方式，也可限制副檔名。", "ホイールに表示するアプリと受け渡し方法を設定できます。拡張子で対象を絞ることもできます。"],
         "Application": ["应用程序", "應用程式", "アプリケーション"],
         "Delivery": ["交接方式", "交接方式", "受け渡し方法"],
         "File extensions": ["文件扩展名", "副檔名", "拡張子"],
@@ -641,7 +631,6 @@ enum Strings {
         3.  項目の上でドロップします。結果は元のファイルの隣に保存されます。
         同じキーをもう一度押すと次のページ。何もない所でドロップするとキャンセル。
         """],
-        "Tap the same key again for more options": ["再按一次同一个键查看更多选项", "再按一次同一個鍵查看更多選項", "同じキーをもう一度押すと他の項目"],
         "Convert": ["转换", "轉換", "変換"],
         "Tools": ["工具", "工具", "ツール"],
         "Actions": ["操作", "操作", "操作"],
@@ -695,8 +684,6 @@ enum Strings {
         "Sticky Notes": ["便利贴", "便利貼", "付箋"],
         "A ring of keycaps around the cursor.": ["指针周围的一圈按键。", "指標周圍的一圈按鍵。", "カーソルを囲むキーの輪。"],
         "A tidy column, like a context menu.": ["整齐的一列，像右键菜单。", "整齊的一列，像右鍵選單。", "コンテキストメニューのような一列。"],
-        "Book spines standing on a wooden shelf.": ["立在木架上的书脊。", "立在木架上的書背。", "木の棚に並ぶ本の背表紙。"],
-        "Colourful sticky notes pinned in a grid.": ["排成网格的彩色便利贴。", "排成網格的彩色便利貼。", "格子状に貼られたカラフルな付箋。"],
         "Tags pegged on a rope, swaying gently.": ["夹在绳上轻轻摇晃的吊牌。", "夾在繩上輕輕搖晃的吊牌。", "ロープに留められ、そっと揺れるタグ。"],
         "Use the %@ template": ["使用“%@”模板", "使用「%@」樣板", "「%@」テンプレートを使う"],
 
@@ -825,14 +812,12 @@ enum Strings {
         "Copied %d paths": ["已拷贝 %d 个路径", "已拷貝 %d 個路徑", "%d 個のパスをコピーしました"],
         "Moved %@": ["已移动 %@", "已移動 %@", "%@ を移動しました"],
         "Moved %d files": ["已移动 %d 个文件", "已移動 %d 個檔案", "%d 個のファイルを移動しました"],
-        "Move cancelled": ["已取消移动", "已取消移動", "移動をキャンセルしました"],
         "Move Here": ["移到这里", "移到這裡", "ここに移動"],
         "Opened AirDrop": ["已打开隔空投送", "已打開 AirDrop", "AirDrop を開きました"],
         "Added to Shelf": ["已放进收纳架", "已放進收納架", "シェルフに追加しました"],
         "Opened in Terminal": ["已在终端中打开", "已在終端機中開啟", "ターミナルで開きました"],
         "Cancelled": ["已取消", "已取消", "キャンセルしました"],
         "Nothing to show for this file": ["这个文件没有可用的选项", "這個檔案沒有可用的選項", "このファイルに使える項目はありません"],
-        "Swivel is on": ["Swivel 已开启", "Swivel 已開啟", "Swivel をオンにしました"],
 
         // Editors
         "Apply": ["应用", "套用", "適用"],
@@ -926,8 +911,6 @@ enum Strings {
         "End": ["结束", "結束", "終了"],
         "Length": ["时长", "長度", "長さ"],
         "Clear": ["清空", "清除", "消去"],
-        "Shelf": ["收纳架", "收納架", "シェルフ"],
-        "Drag a file, tap ⌃, drop on Float.": ["拖住文件，按 ⌃，放到“浮动”上。", "拖住檔案，按 ⌃，放到「浮動」上。", "ファイルをドラッグし ⌃ を押して「フロート」にドロップ。"],
         "Swivel — open the menu to use your enabled tools.": ["Swivel — 打开菜单使用已开启的工具。", "Swivel — 開啟選單使用已開啟的工具。", "Swivel — メニューから有効なツールを使えます。"],
         // Optional native tools
         "Text Capture": ["提取文字", "擷取文字", "テキスト認識"],

@@ -161,7 +161,12 @@ final class Clothesline: NSObject {
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys,
                                                                   options: [.skipsHiddenFiles])) ?? []
         return files
-            .filter { Self.mediaExtensions.contains($0.pathExtension.lowercased()) }
+            // Only plain files: a link or folder planted here would be previewed, opened and copied through.
+            .filter { url in
+                var info = stat()
+                return Self.mediaExtensions.contains(url.pathExtension.lowercased())
+                    && lstat(url.path, &info) == 0 && info.st_mode & S_IFMT == S_IFREG
+            }
             .map { url -> (URL, Date) in
                 let values = try? url.resourceValues(forKeys: Set(keys))
                 return (url, values?.addedToDirectoryDate ?? values?.creationDate ?? .distantPast)
@@ -244,8 +249,16 @@ final class Clothesline: NSObject {
     }
 
     /// A small picture of an image or the first frame of a movie.
-    static func thumbnail(_ url: URL, maxPixels: Int) -> CGImage? {
-        guard ["mov", "mp4"].contains(url.pathExtension.lowercased()) else { return try? Images.load(url, maxPixels: maxPixels) }
+    /// Made on the main thread, so the picture is checked and scaled from one open source of at most `sourceLimit`
+    /// pixels (a 48 MP photo fits): a tiny file claiming a gigantic picture would take seconds or minutes to scale.
+    static func thumbnail(_ url: URL, maxPixels: Int, sourceLimit: Double = 60_000_000) -> CGImage? {
+        guard ["mov", "mp4"].contains(url.pathExtension.lowercased()) else {
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  Images.claimedPixels(source).map({ $0 <= sourceLimit }) == true else { return nil }
+            return CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true, kCGImageSourceThumbnailMaxPixelSize: maxPixels] as CFDictionary)
+        }
         let generator = AVAssetImageGenerator(asset: Video.openAsset(url))
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: maxPixels, height: maxPixels)
@@ -421,7 +434,24 @@ final class Clothesline: NSObject {
 
     /// One clipboard item for a print: the file, plus its picture for apps that paste images rather than files. Two
     /// separate items (the file and an NSImage) made chat apps send two attachments: the file and a large TIFF.
-    nonisolated static func pasteboardItem(for url: URL) -> NSPasteboardItem {
+    /// `maxBytes` bounds the picture's bytes read into memory; past it only the file reference is copied.
+    nonisolated static func pasteboardItem(for url: URL, maxBytes: Int64 = 256_000_000) -> NSPasteboardItem {
+        pasteboardItem(for: url, maxBytes: maxBytes, read: nil)
+    }
+
+    /// Several files, with at most `totalBytes` of pictures among them (dozens of large images would otherwise all be
+    /// read into memory at once); the rest are copied as references only.
+    nonisolated static func pasteboardItems(for urls: [URL], totalBytes: Int64 = 512_000_000) -> [NSPasteboardItem] {
+        var left = totalBytes
+        return urls.map { url in
+            var used: Int64 = 0
+            let item = pasteboardItem(for: url, maxBytes: min(256_000_000, left), read: &used)
+            left -= used
+            return item
+        }
+    }
+
+    private nonisolated static func pasteboardItem(for url: URL, maxBytes: Int64, read used: UnsafeMutablePointer<Int64>?) -> NSPasteboardItem {
         let item = NSPasteboardItem()
         item.setString(url.absoluteString, forType: .fileURL)
         // Only the print's own regular file, never through a link, and not unbounded: checked and read on one descriptor.
@@ -430,14 +460,16 @@ final class Clothesline: NSObject {
         guard fd >= 0 else { return item }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         var info = stat()
-        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size <= 256_000_000,
-              let data = try? handle.readToEnd(),
+        // Read at most one byte past the limit, in case the file grew after fstat.
+        guard maxBytes > 0, fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, Int64(info.st_size) <= maxBytes,
+              let data = try? handle.read(upToCount: Int(maxBytes) + 1), Int64(data.count) <= maxBytes,
               CGImageSourceCreateWithData(data as CFData, nil).map({ CGImageSourceGetCount($0) > 0 }) == true else { return item }
+        used?.pointee = Int64(data.count)
         // The file's own bytes under its own type (a PNG screenshot is pasted as that PNG, not re-encoded).
         item.setData(data, forType: NSPasteboard.PasteboardType(type.identifier))
         // Apps that only take PNG or TIFF get PNG, made only if one of them asks.
         if type != .png, type != .tiff {
-            item.setDataProvider(PNGOnDemand(url), forTypes: [.png])
+            item.setDataProvider(PNGOnDemand(data), forTypes: [.png])
         }
         return item
     }
@@ -2586,17 +2618,25 @@ final class CardFlight {
 final class PNGOnDemand: NSObject, NSPasteboardItemDataProvider, @unchecked Sendable {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var current: PNGOnDemand?
-    private let url: URL
+    /// The bytes read when the print was copied: the file isn't opened again, so a link swapped in later isn't followed.
+    private let data: Data
 
-    init(_ url: URL) {
-        self.url = url
+    init(_ data: Data) {
+        self.data = data
         super.init()
         Self.lock.withLock { Self.current = self }
     }
 
     func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
-        guard type == .png, let image = try? Images.load(url), let data = try? Images.encode(image, type: .png, quality: 1) else { return }
-        item.setData(data, forType: .png)
+        guard type == .png, let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? Int, let height = props[kCGImagePropertyPixelHeight] as? Int,
+              Double(width) * Double(height) <= Images.maxDecodePixels,
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+                  kCGImageSourceThumbnailMaxPixelSize: max(width, height)] as CFDictionary),
+              let png = try? Images.encode(image, type: .png, quality: 1) else { return }
+        item.setData(png, forType: .png)
     }
 
     func pasteboardFinishedWithDataProvider(_ pasteboard: NSPasteboard) {

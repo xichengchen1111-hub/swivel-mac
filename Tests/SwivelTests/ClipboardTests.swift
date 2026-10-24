@@ -54,6 +54,32 @@ struct ClipboardTests {
         }
     }
 
+    /// A tiny file that claims a gigantic picture gets no rope thumbnail (made on the main thread, it would take minutes),
+    /// and several files share one budget for the bytes copied with them.
+    @Test func ropeThumbnailsAndCopiedBytesAreBounded() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("swivel-clipboard-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let ctx = try #require(CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
+                                         space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let image = try #require(ctx.makeImage())
+        let urls = try (0..<3).map { index -> URL in
+            let url = dir.appendingPathComponent("p\(index).png")
+            try Images.encode(image, type: .png, quality: 1).write(to: url)
+            return url
+        }
+        // The size the header claims decides, before anything is decoded.
+        #expect(Images.claimedPixels(urls[0]) == Double(64 * 64))
+        #expect(Clothesline.thumbnail(urls[0], maxPixels: 32) != nil)
+        #expect(Clothesline.thumbnail(urls[0], maxPixels: 32, sourceLimit: 64 * 64 - 1) == nil)
+        let size = Int64(try Data(contentsOf: urls[0]).count)
+        let items = Clothesline.pasteboardItems(for: urls, totalBytes: size * 2)
+        #expect(items.map { $0.types.contains(.png) } == [true, true, false])
+        #expect(items.allSatisfy { $0.types.contains(.fileURL) })
+    }
+
     /// Another app can put anything on the clipboard: an image too big to decode on the main thread isn't hung,
     /// read from its header before decoding; secrets copied from a QR code carry the concealed marker.
     @Test func hugeCopiedImagesAreLeftAloneAndSecretsAreConcealed() throws {

@@ -126,6 +126,31 @@ enum AssistantDraft {
             return blanks.contains(scalar.value) || p.isDefaultIgnorableCodePoint || p.isVariationSelector || p.isNoncharacterCodePoint
         }
     }
+    /// A folder specific enough to hand an assistant as its workspace, after resolving links: a project in the home
+    /// folder (~/myrepo, ~/Desktop/Project, but not ~/Desktop, ~/Documents or anything in ~/Library), a folder in iCloud
+    /// Drive or another cloud drive, a folder inside a volume or another user's home (/Volumes/Disk/Project), or one
+    /// two levels below the root elsewhere (/tmp/notes). Never /, a top-level folder, a volume or the home folder.
+    static func isNarrowWorkspace(_ directory: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
+        let parts = directory.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let homeParts = home.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        if parts.starts(with: homeParts) {
+            let inside = Array(parts.dropFirst(homeParts.count))
+            // Cloud drives count as a home of their own: iCloud Drive's root, or a provider's folder, is too broad.
+            if inside.starts(with: ["Library", "Mobile Documents", "com~apple~CloudDocs"]) { return inside.count >= 4 }
+            // Google Drive keeps its roots one level down ("GoogleDrive-…/My Drive", "…/Shared drives").
+            if inside.starts(with: ["Library", "CloudStorage"]) {
+                return inside.count >= (inside.count > 2 && inside[2].hasPrefix("GoogleDrive-") ? 5 : 4)
+            }
+            guard let top = inside.first, top != "Library" else { return false }
+            if top.hasPrefix(".") { return inside.count >= 2 && !["ssh", "aws", "gnupg", "Trash"].contains(String(top.dropFirst())) }
+            let shared = ["Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music", "Public", "Applications", "Sites"]
+            return inside.count >= (shared.contains(top) ? 2 : 1)
+        }
+        if homeParts.starts(with: parts) { return false }  // The home folder or above it.
+        let roots = ["Volumes", "Users", "System", "Library", "Applications", "private"]
+        return parts.count >= (parts.count > 1 && roots.contains(parts[1]) ? 4 : 3)
+    }
+
     static func url(for delivery: FileAppTarget.Delivery, files: [URL]) throws -> URL {
         guard !files.isEmpty, files.allSatisfy(\.isFileURL), [.codexDraft, .claudeCodeDraft].contains(delivery) else {
             throw ToolError(L("Choose files for this draft."))
@@ -141,10 +166,7 @@ enum AssistantDraft {
             (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true ? url : url.deletingLastPathComponent()
         })
         components.queryItems = [URLQueryItem(name: delivery == .codexDraft ? "prompt" : "q", value: text)]
-        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
-        let broad = Set(["/", home] + ["Desktop", "Documents", "Downloads"].map { home + "/" + $0 })
-        if directories.count == 1, let directory = directories.first, !broad.contains(directory.standardizedFileURL.path),
-           !directory.standardizedFileURL.path.hasPrefix("/Volumes/") || directory.standardizedFileURL.pathComponents.count > 3 {
+        if directories.count == 1, let directory = directories.first, isNarrowWorkspace(directory) {
             components.queryItems?.append(URLQueryItem(name: delivery == .codexDraft ? "path" : "folder", value: directory.path))
         }
         // URLComponents leaves "+" alone, but both apps decode queries as forms, where "+" means a space: a folder
@@ -203,7 +225,7 @@ enum FileAppRouting {
         if target.delivery == .copyAndOpenPage {
             // Web pages paste pictures, not Finder files, so images also carry their own bytes (one item each).
             pasteboard.clearContents()
-            guard pasteboard.writeObjects(files.map(Clothesline.pasteboardItem(for:))) else { throw ToolError(L("Could not copy the selected files.")) }
+            guard pasteboard.writeObjects(Clothesline.pasteboardItems(for: files)) else { throw ToolError(L("Could not copy the selected files.")) }
             // A page can't be handed files through its address; the card lets the user drop them into it.
             if open == nil { HandoffCard.shared.show(files, page: target.name) }
         }

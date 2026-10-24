@@ -628,9 +628,12 @@ enum Shell {
     /// The tool reads `input` files in order (or an empty stdin), so it never waits on a terminal. Its stderr is
     /// drained while it runs: a tool that writes more than a pipe's 64 KB would otherwise block forever. `watch` is
     /// asked twice a second; returning a message stops the tool and throws that message. Cancelling the task stops it.
+    /// `outputLimit` counts what the tool writes to stdout (otherwise discarded) and stops it with the message past
+    /// that many bytes.
     static func run(_ tool: String, _ args: [String], in directory: URL? = nil, input: [URL] = [],
+                    outputLimit: (bytes: Int64, message: String)? = nil,
                     watch: (@Sendable () -> String?)? = nil) async throws {
-        let run = ShellRun(tool: tool, args: args, directory: directory, input: input, watch: watch)
+        let run = ShellRun(tool: tool, args: args, directory: directory, input: input, outputLimit: outputLimit, watch: watch)
         try await withTaskCancellationHandler {
             try await run.start()
         } onCancel: {
@@ -645,15 +648,19 @@ private final class ShellRun: @unchecked Sendable {
     private let tool: String
     private let input: [URL]
     private let watch: (@Sendable () -> String?)?
+    private let outputLimit: (bytes: Int64, message: String)?
     private let lock = NSLock()
     private var errorTail = Data()
+    private var outputBytes: Int64 = 0
     private var stopReason: String?
     private var timer: DispatchSourceTimer?
     private static let keptErrorBytes = 16_384
 
-    init(tool: String, args: [String], directory: URL?, input: [URL], watch: (@Sendable () -> String?)?) {
+    init(tool: String, args: [String], directory: URL?, input: [URL], outputLimit: (bytes: Int64, message: String)?,
+         watch: (@Sendable () -> String?)?) {
         self.tool = tool
         self.input = input
+        self.outputLimit = outputLimit
         self.watch = watch
         process.executableURL = URL(fileURLWithPath: tool)
         process.arguments = args
@@ -677,7 +684,12 @@ private final class ShellRun: @unchecked Sendable {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             let errors = Pipe()
             process.standardError = errors
-            process.standardOutput = FileHandle.nullDevice
+            let output = outputLimit == nil ? nil : Pipe()
+            process.standardOutput = output ?? FileHandle.nullDevice
+            output?.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                let data = handle.availableData
+                if data.isEmpty { handle.readabilityHandler = nil } else { self?.count(data.count) }
+            }
             let feed = input.isEmpty ? nil : Pipe()
             process.standardInput = feed ?? FileHandle.nullDevice
             errors.fileHandleForReading.readabilityHandler = { [weak self] handle in
@@ -686,6 +698,10 @@ private final class ShellRun: @unchecked Sendable {
             }
             process.terminationHandler = { [self] p in
                 errors.fileHandleForReading.readabilityHandler = nil
+                if let output {
+                    output.fileHandleForReading.readabilityHandler = nil
+                    count(output.fileHandleForReading.readDataToEndOfFile().count)
+                }
                 keep(errors.fileHandleForReading.readDataToEndOfFile())
                 lock.lock()
                 timer?.cancel()
@@ -699,6 +715,7 @@ private final class ShellRun: @unchecked Sendable {
             }
             do { try process.run() } catch {
                 errors.fileHandleForReading.readabilityHandler = nil
+                output?.fileHandleForReading.readabilityHandler = nil
                 return cont.resume(throwing: error)
             }
             lock.lock(); let stoppedEarly = stopReason != nil; lock.unlock()
@@ -726,6 +743,15 @@ private final class ShellRun: @unchecked Sendable {
                 if process.isRunning { kill(process.processIdentifier, SIGKILL) }
             }
         }
+    }
+
+    private func count(_ bytes: Int) {
+        guard let outputLimit, bytes > 0 else { return }
+        lock.lock()
+        outputBytes += Int64(bytes)
+        let over = outputBytes > outputLimit.bytes
+        lock.unlock()
+        if over { stop(outputLimit.message) }
     }
 
     private func keep(_ data: Data) {

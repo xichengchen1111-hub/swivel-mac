@@ -333,7 +333,7 @@ final class DoctorCenter {
         let env = environment
         let catalogue = ClearDiskCatalog.entries
         let keepers = try duplicateKeepers(rows)
-        let jobs = rows.compactMap { row -> (DoctorTrashTarget, String, URL?)? in
+        let jobs = rows.compactMap { row -> (DoctorTrashTarget, String, Keeper?)? in
             guard let target = row.trash, DoctorTrash.isAllowed(target, catalogue: catalogue) else { return nil }
             let name = catalogue.first { $0.path == target.path }?.name ?? row.title
             return (target, name, row.group.flatMap { keepers[$0] })
@@ -364,7 +364,7 @@ final class DoctorCenter {
                     case .duplicate:
                         // The kept copy must still be there with the same content as the one being moved.
                         let file = try DoctorTrash.resolve(target.path, home: env.home, expect: S_IFREG)
-                        guard let keeper, keeper.standardizedFileURL != file.standardizedFileURL,
+                        guard let keeper = keeper?.url, keeper.standardizedFileURL != file.standardizedFileURL,
                               (try? FileIdentity.read(keeper)) != target.identity,
                               let kept = digest(of: keeper), kept == DoctorDuplicates.digest(file) else {
                             throw ToolError(L("%@ no longer has an identical copy to keep, so it was left in place.", DoctorTrash.displayPath(file)))
@@ -382,9 +382,10 @@ final class DoctorCenter {
                             throw ToolError(L("Files changed since the check. Run the check again."))
                         }
                     case .similar:
-                        // Not the same content, but one file of the group must still be there.
+                        // Not the same content, but one file of the group must still be there: the very file found.
                         var kept = stat()
-                        guard let keeper, lstat(keeper.path, &kept) == 0, kept.st_mode & S_IFMT == S_IFREG else {
+                        guard let keeper, lstat(keeper.url.path, &kept) == 0, kept.st_mode & S_IFMT == S_IFREG,
+                              keeper.identity == FileIdentity(device: kept.st_dev, inode: UInt64(kept.st_ino)) else {
                             throw ToolError(L("Keep at least one copy of each file: deselect one copy of “%@”.", DoctorTrash.displayPath(URL(fileURLWithPath: target.path))))
                         }
                     case .standard, .leftover: break
@@ -410,20 +411,24 @@ final class DoctorCenter {
 
     /// For each group of copies being moved, one copy that stays: a copy not among `rows`, still where it was found.
     /// Refuses when every copy of a file was selected.
-    private func duplicateKeepers(_ rows: [DoctorRow]) throws -> [String: URL] {
+    struct Keeper: Sendable { var url: URL; var identity: FileIdentity }
+
+    private func duplicateKeepers(_ rows: [DoctorRow]) throws -> [String: Keeper] {
         // By path, not by row: one file can be listed in more than one group, and a file moved by this batch can never
         // be the copy that stays.
         let moving = Set(rows.compactMap { $0.trash != nil ? $0.location.map { DoctorPrivacy.location($0.path) } : nil })
-        var keepers: [String: URL] = [:]
+        var keepers: [String: Keeper] = [:]
         for group in Set(rows.compactMap { [.duplicate, .similar].contains($0.trash?.origin) ? $0.group : nil }) {
             let members = (stored[.duplicates]?.rows ?? []).filter { $0.group == group && $0.level == 1 }
-            guard let keep = members.first(where: { row in
-                guard let url = row.location else { return false }
-                return !moving.contains(DoctorPrivacy.location(url.path)) && FileManager.default.fileExists(atPath: url.path)
-            })?.location else {
+            // Still the file that was found there (same identity), not just something at that path.
+            guard let row = members.first(where: { row in
+                guard let url = row.location, !moving.contains(DoctorPrivacy.location(url.path)),
+                      let now = try? FileIdentity.read(url) else { return false }
+                return row.identity == now
+            }), let url = row.location, let identity = row.identity else {
                 throw ToolError(L("Keep at least one copy of each file: deselect one copy of “%@”.", members.first?.title ?? ""))
             }
-            keepers[group] = keep
+            keepers[group] = Keeper(url: url, identity: identity)
         }
         return keepers
     }

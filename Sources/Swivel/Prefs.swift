@@ -370,18 +370,8 @@ enum Prefs {
         Set(defaults.stringArray(forKey: "hidden.\(slot(mode, kind))") ?? [])
     }
 
-    static func setHidden(_ titles: Set<String>, _ mode: WheelMode, _ kind: FileKind) {
-        defaults.set(Array(titles), forKey: "hidden.\(slot(mode, kind))")
-        post()
-    }
-
     static func order(_ mode: WheelMode, _ kind: FileKind) -> [String] {
         defaults.stringArray(forKey: "order.\(slot(mode, kind))") ?? []
-    }
-
-    static func setOrder(_ titles: [String], _ mode: WheelMode, _ kind: FileKind) {
-        defaults.set(titles, forKey: "order.\(slot(mode, kind))")
-        post()
     }
 
     /// Saves order and hidden items together, posting one change.

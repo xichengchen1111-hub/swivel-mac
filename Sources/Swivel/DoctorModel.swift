@@ -176,6 +176,8 @@ struct DoctorRow: Sendable, Identifiable {
     var level = 0
     /// For a drive: the physical disk it is on; volumes on the same disk eject together.
     var disk: String?
+    /// For a file a search found: which file it was, whether or not it may be moved.
+    var identity: FileIdentity? = nil
 }
 
 struct DoctorTrashTarget: Sendable, Equatable {

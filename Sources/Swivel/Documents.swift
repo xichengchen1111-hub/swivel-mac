@@ -356,9 +356,13 @@ enum Archives {
     }
 
     /// ditto may succeed despite a bad ZIP CRC. libarchive must read every data byte before publication.
-    static func verify(_ archive: URL, watch: (@Sendable () -> String?)? = nil) async throws {
+    /// Also stops past `expandedLimit` bytes of contents, so a decompression bomb can't keep it busy for the full
+    /// watchdog time; the same bound as an extracted archive's logical size.
+    static func verify(_ archive: URL, expandedLimit: Int64 = 100_000_000_000,
+                       watch: (@Sendable () -> String?)? = nil) async throws {
         let start = Date()
-        try await Shell.run("/usr/bin/tar", ["-xOf", archive.path, "--no-mac-metadata", "--passphrase", noPassphrase], watch: {
+        try await Shell.run("/usr/bin/tar", ["-xOf", archive.path, "--no-mac-metadata", "--passphrase", noPassphrase],
+                            outputLimit: (expandedLimit, L("The expanded archive exceeds the safety limit.")), watch: {
             if Date().timeIntervalSince(start) > 600 { return L("Archive processing took too long and was stopped.") }
             return watch?()
         })

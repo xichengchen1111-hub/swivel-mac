@@ -397,6 +397,20 @@ struct SecurityTests {
         }
         let deeper = try AssistantDraft.url(for: .codexDraft, files: [home.appendingPathComponent("Desktop/Project/a.txt")])
         #expect(URLComponents(url: deeper, resolvingAgainstBaseURL: false)?.queryItems?.contains { $0.name == "path" } == true)
+        let fakeHome = URL(fileURLWithPath: "/Users/someone")
+        func narrow(_ path: String) -> Bool { AssistantDraft.isNarrowWorkspace(URL(fileURLWithPath: path), home: fakeHome) }
+        for broad in ["/", "/Users", "/Users/someone", "/Users/someone/Pictures", "/Users/someone/Library/Caches", "/Applications", "/tmp",
+                      "/Users/other", "/Library/Caches", "/Users/someone/Library/CloudStorage/Dropbox", "/Users/someone/Documents",
+                      "/Users/someone/.ssh", "/Users/someone/.config", "/Users/someone/.Trash", "/Users/someone/.ssh/keys",
+                      "/Users/someone/Library/CloudStorage/GoogleDrive-a@b.c/My Drive",
+                      "/Volumes/Disk", "/Users/someone/Library/Mobile Documents/com~apple~CloudDocs"] {
+            #expect(!narrow(broad), "\(broad)")
+        }
+        for specific in ["/Users/someone/Pictures/Trip", "/Volumes/Disk/Project", "/tmp/notes", "/Users/other/Project",
+                         "/Users/someone/myrepo", "/Users/someone/Library/CloudStorage/Dropbox/Work", "/Users/someone/.config/nvim",
+                         "/Users/someone/Library/CloudStorage/GoogleDrive-a@b.c/My Drive/Work", "/Users/someone/Library/Mobile Documents/com~apple~CloudDocs/Work"] {
+            #expect(narrow(specific), "\(specific)")
+        }
     }
 
     @Test func extractedLinksMustStayInsideTheArchive() throws {
@@ -433,6 +447,17 @@ struct SecurityTests {
         try FileManager.default.createSymbolicLink(atPath: loop.appendingPathComponent("p").path, withDestinationPath: "q")
         try FileManager.default.createSymbolicLink(atPath: loop.appendingPathComponent("q").path, withDestinationPath: "p")
         #expect(throws: ToolError.self) { try Archives.validateExtractedTree(loop, allowMacMetadata: false) }
+    }
+
+    @Test func archiveVerificationStopsPastTheExpandedLimit() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("swivel-bomb-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data(count: 4_000_000).write(to: dir.appendingPathComponent("zeros.bin"))
+        let zip = dir.appendingPathComponent("small.zip")
+        try await Shell.run("/usr/bin/ditto", ["-c", "-k", dir.appendingPathComponent("zeros.bin").path, zip.path])
+        try await Archives.verify(zip)
+        await #expect(throws: ToolError.self) { try await Archives.verify(zip, expandedLimit: 1_000_000) }
     }
 
     @Test func tarKeepsAFileNamedLikeAnArchiveInclusion() async throws {

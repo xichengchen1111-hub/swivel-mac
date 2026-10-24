@@ -3,10 +3,18 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 swift build -c release
+# The shipped executable drops local symbols (about 3 MB each for the app and its helper); build/Swivel.dSYM keeps
+# them, so crash reports from this build can still be symbolicated (`atos -o build/Swivel.dSYM/... -l <load address>`).
+mkdir -p build
+rm -rf build/Swivel.dSYM
+dsymutil .build/release/Swivel -o build/Swivel.dSYM
+EXECUTABLE=build/Swivel-stripped
+cp .build/release/Swivel "$EXECUTABLE"
+strip -x "$EXECUTABLE"
 APP=build/Swivel.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/Swivel "$APP/Contents/MacOS/Swivel"
+cp "$EXECUTABLE" "$APP/Contents/MacOS/Swivel"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/Swivel.icns "$APP/Contents/Resources/Swivel.icns"
 # Licences of vendored third-party data (Mac Doctor), inside the signature.
@@ -24,7 +32,7 @@ mcpb/pack.sh "$APP/Contents/Resources/Swivel.mcpb" >/dev/null
 # executable under another bundle identifier, so Launch Services never takes the server for Swivel.app.
 HELPER="$APP/Contents/Helpers/Swivel MCP.app"
 mkdir -p "$HELPER/Contents/MacOS"
-cp .build/release/Swivel "$HELPER/Contents/MacOS/Swivel"
+cp "$EXECUTABLE" "$HELPER/Contents/MacOS/Swivel"
 cp Resources/Info.plist "$HELPER/Contents/Info.plist"
 APP_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' Resources/Info.plist)"
 /usr/libexec/PlistBuddy \
