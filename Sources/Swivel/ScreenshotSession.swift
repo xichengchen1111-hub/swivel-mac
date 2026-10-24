@@ -107,6 +107,28 @@ enum AppInstance {
     static let reopen = Notification.Name("SwivelReopenExistingInstance")
     private static var lease: AppInstanceLease?
     struct Process: Equatable { var pid: Int32; var launched: Date }
+    nonisolated static func reopenTokenFile(_ id: String) -> URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Swivel", isDirectory: true).appendingPathComponent("reopen-" + id + ".token")
+    }
+
+    /// True for a reopen request from a second launch of Swivel: its token matches the fresh, private file it wrote.
+    /// The file is used up either way.
+    static func acceptsReopen(token: String?, id: String, now: Date = Date()) -> Bool {
+        let file = reopenTokenFile(id)
+        defer { unlink(file.path) }
+        guard let token else { return false }
+        let fd = open(file.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == getuid(), info.st_size <= 64,
+              now.timeIntervalSince1970 - Double(info.st_mtimespec.tv_sec) < 10 else { return false }
+        var buffer = [UInt8](repeating: 0, count: 64)
+        let count = read(fd, &buffer, 64)
+        return count > 0 && String(decoding: buffer.prefix(count), as: UTF8.self) == token
+    }
+
     static func leader(_ processes: [Process]) -> Int32? {
         processes.min { $0.launched == $1.launched ? $0.pid < $1.pid : $0.launched < $1.launched }?.pid
     }
@@ -123,7 +145,17 @@ enum AppInstance {
         let peers = NSRunningApplication.runningApplications(withBundleIdentifier: id)
             .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && $0.activationPolicy != .prohibited }
         let pid = leader(peers.map { Process(pid: $0.processIdentifier, launched: $0.launchDate ?? .distantPast) })
-        DistributedNotificationCenter.default().postNotificationName(reopen, object: id, userInfo: nil, deliverImmediately: true)
+        // Any process may post this notification, so it carries a one-time token that only a process able to write
+        // Swivel's own Application Support folder (not a sandboxed app) can have put there.
+        let token = UUID().uuidString
+        let tokenFile = reopenTokenFile(id)
+        unlink(tokenFile.path)
+        let fd = open(tokenFile.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        if fd >= 0 {
+            _ = token.withCString { write(fd, $0, strlen($0)) }
+            close(fd)
+        }
+        DistributedNotificationCenter.default().postNotificationName(reopen, object: id, userInfo: ["token": token], deliverImmediately: true)
         if let existing = peers.first(where: { $0.processIdentifier == pid }) {
             NSApp.yieldActivation(to: existing)
             existing.activate(from: .current, options: [])

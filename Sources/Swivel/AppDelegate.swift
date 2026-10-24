@@ -21,10 +21,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             source.resume()
             signalSources.append(source)
         }
-        // Any local process can post a distributed notification, so a burst only brings the window forward once.
-        DistributedNotificationCenter.default().addObserver(forName: AppInstance.reopen, object: Bundle.main.bundleIdentifier, queue: .main) { [weak self] _ in
+        // Any local process can post a distributed notification: only one from a second launch (its token matches
+        // the private file it wrote) brings the window forward, and a burst only once.
+        DistributedNotificationCenter.default().addObserver(forName: AppInstance.reopen, object: Bundle.main.bundleIdentifier, queue: .main) { [weak self] note in
+            let token = note.userInfo?["token"] as? String
             MainActor.assumeIsolated {
-                guard let self, Date().timeIntervalSince(self.lastReopen) > 2 else { return }
+                guard let self, let id = Bundle.main.bundleIdentifier, AppInstance.acceptsReopen(token: token, id: id),
+                      Date().timeIntervalSince(self.lastReopen) > 2 else { return }
                 self.lastReopen = Date()
                 Clothesline.shared.reconcileScreenshotTakeover(); AppWindow.shared.show()
             }

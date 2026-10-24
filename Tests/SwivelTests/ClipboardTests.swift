@@ -80,6 +80,42 @@ struct ClipboardTests {
         #expect(items.allSatisfy { $0.types.contains(.fileURL) })
     }
 
+    /// A print swapped for a link after the rope listed it is never handed on; a movie that can't give a frame quickly
+    /// leaves a plain print.
+    @Test func swappedPrintsAreRecheckedAndMovieFramesAreBounded() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("swivel-clipboard-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let print = dir.appendingPathComponent("shot.png")
+        try Data("x".utf8).write(to: print)
+        #expect(Clothesline.isPlainFile(print))
+        try FileManager.default.removeItem(at: print)
+        try FileManager.default.createSymbolicLink(at: print, withDestinationURL: dir)
+        #expect(!Clothesline.isPlainFile(print))
+        let fake = dir.appendingPathComponent("clip.mov")
+        try Data(count: 1000).write(to: fake)
+        let start = Date()
+        #expect(Clothesline.movieFrame(fake, maxPixels: 100, wait: 0.5) == nil)
+        #expect(Date().timeIntervalSince(start) < 1)
+    }
+
+    /// Only a second launch of Swivel, which can write its private token file, may bring the window forward.
+    @Test func reopenRequestsNeedTheSecondLaunchsToken() throws {
+        let id = "test.swivel.\(UUID().uuidString)"
+        let file = AppInstance.reopenTokenFile(id)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { unlink(file.path) }
+        #expect(!AppInstance.acceptsReopen(token: "abc", id: id))  // no file
+        try Data("abc".utf8).write(to: file)
+        #expect(!AppInstance.acceptsReopen(token: "abd", id: id))  // wrong token, and the file is used up
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        try Data("abc".utf8).write(to: file)
+        #expect(!AppInstance.acceptsReopen(token: "abc", id: id, now: Date().addingTimeInterval(60)))  // stale
+        try Data("abc".utf8).write(to: file)
+        #expect(AppInstance.acceptsReopen(token: "abc", id: id))
+        #expect(!AppInstance.acceptsReopen(token: "abc", id: id))  // once only
+    }
+
     /// Another app can put anything on the clipboard: an image too big to decode on the main thread isn't hung,
     /// read from its header before decoding; secrets copied from a QR code carry the concealed marker.
     @Test func hugeCopiedImagesAreLeftAloneAndSecretsAreConcealed() throws {

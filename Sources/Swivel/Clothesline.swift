@@ -259,10 +259,34 @@ final class Clothesline: NSObject {
                 kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
                 kCGImageSourceShouldCacheImmediately: true, kCGImageSourceThumbnailMaxPixelSize: maxPixels] as CFDictionary)
         }
+        return movieFrame(url, maxPixels: maxPixels)
+    }
+
+    /// A movie's first frame, decoded on another thread; the main thread waits at most `wait` seconds, so a crafted
+    /// or slow movie leaves a plain print instead of freezing the rope.
+    nonisolated static func movieFrame(_ url: URL, maxPixels: Int, wait: TimeInterval = 0.5) -> CGImage? {
         let generator = AVAssetImageGenerator(asset: Video.openAsset(url))
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: maxPixels, height: maxPixels)
-        return try? generator.copyCGImage(at: .zero, actualTime: nil)
+        final class Result: @unchecked Sendable { var image: CGImage? }
+        let result = Result(), done = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) let unsafeGenerator = generator
+        DispatchQueue.global(qos: .userInitiated).async {
+            result.image = try? unsafeGenerator.copyCGImage(at: .zero, actualTime: nil)
+            done.signal()
+        }
+        guard done.wait(timeout: .now() + wait) == .success else {
+            generator.cancelAllCGImageGeneration()
+            return nil
+        }
+        return result.image
+    }
+
+    /// Still the plain file that was listed: a link or folder put in its place since is never opened, previewed,
+    /// copied or dragged out (the app on the other end would read what the link points at).
+    nonisolated static func isPlainFile(_ url: URL) -> Bool {
+        var info = stat()
+        return lstat(url.path, &info) == 0 && info.st_mode & S_IFMT == S_IFREG
     }
 
     // MARK: Showing and hiding
@@ -422,6 +446,7 @@ final class Clothesline: NSObject {
     // MARK: Item actions
 
     func copy(_ url: URL) {
+        guard Self.isPlainFile(url) else { return reload() }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.writeObjects([Self.pasteboardItem(for: url)])
@@ -475,6 +500,7 @@ final class Clothesline: NSObject {
     }
 
     func openInPreview(_ url: URL) {
+        guard Self.isPlainFile(url) else { return reload() }
         let isMovie = ["mov", "mp4"].contains(url.pathExtension.lowercased())
         let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: isMovie ? "com.apple.QuickTimePlayerX" : "com.apple.Preview")
         if let app { NSWorkspace.shared.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil) } else { NSWorkspace.shared.open(url) }
@@ -484,6 +510,7 @@ final class Clothesline: NSObject {
 
     /// Quick Look grows out of the print, and the rope lifts once it has started.
     func quickLook(_ url: URL) {
+        guard Self.isPlainFile(url) else { return reload() }
         let rope = panel.rope
         let picture = rope.image(of: url).map { NSImage(cgImage: $0, size: NSSize(width: $0.width / 2, height: $0.height / 2)) }
         QuickLooker.shared.show(url, from: { [weak rope] in rope?.screenFrame(of: url) }, image: picture)
@@ -1555,6 +1582,7 @@ final class RopeView: NSView, NSDraggingSource {
         handled = true
         longPress?.cancel()
         setPressed(print, false)
+        guard Clothesline.isPlainFile(url) else { return }
         // Unclipped: what stays on the rope dims to a ghost, the rope springs up as the weight leaves, and the
         // trackpad gives a small detent.
         print.lifted = true
@@ -2044,7 +2072,7 @@ final class IncomingCard: NSObject, NSDraggingSource {
     }
 
     func beginDrag(with event: NSEvent) {
-        guard var url else { return }
+        guard var url, Clothesline.isPlainFile(url) else { return }
         // Another app may read a dropped file long after the drop (a chat attachment is read when it is sent), so
         // the file goes where screenshots normally go before the drag starts, and the path it hands over stays valid.
         if let saved = release(url), saved != url { url = saved; self.url = saved; savedForDrag = saved }
