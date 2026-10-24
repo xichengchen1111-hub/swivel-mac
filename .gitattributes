@@ -1,0 +1,2 @@
+# Preserve Core ML protobuf/weight bytes; do not apply text conversions or line merges.
+ThirdParty/RealESRGAN/RealESRGAN.mlpackage/Data/** binary

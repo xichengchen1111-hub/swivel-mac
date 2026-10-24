@@ -1,0 +1,18 @@
+Real-ESRGAN x4plus Core ML conversion for Swivel
+
+Model: Real-ESRGAN, Copyright (c) 2021 Xintao Wang.
+https://github.com/xinntao/Real-ESRGAN
+Distributed under the BSD 3-Clause License in LICENSE.
+
+Conversion-only RRDB architecture: adapted from BasicSR,
+https://github.com/XPixelGroup/BasicSR at
+8d56e3a045f9fb3e1d8872f92ee4a4f07f886b0a.
+Distributed under Apache License 2.0 in LICENSE-BasicSR.txt.
+The upstream tree has no NOTICE file. This notice describes Swivel's use.
+
+Changes: retain only the trained x4 network; remove registry, weight
+initialization and x1/x2 branches; use non-in-place activations; add fixed
+RGB image normalization, clipping and output scaling for Core ML.
+
+Conversion tools are development-only dependencies. The application ships
+only model data and runs it with Apple's system Core ML framework.

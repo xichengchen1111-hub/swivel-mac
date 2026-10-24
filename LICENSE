@@ -1,0 +1,46 @@
+Swivel Source-Available License (View and Personal Use Only)
+
+Copyright (c) 2026 xichengchen1111-hub. All rights reserved.
+
+1. What you may do
+   You may view the source code and other files in this repository (the
+   "Software"), download them, build the Software, and run unmodified copies of
+   it, or of the prebuilt releases published in this repository, on devices
+   you own or control, for your own personal, non-commercial use.
+
+2. What you may not do
+   Without prior written permission from the copyright holder, you may not:
+   a. modify, adapt, translate, or create derivative works of the Software;
+   b. distribute, publish, sublicense, sell, rent, or otherwise make the
+      Software, any part of it, or any modified version of it available to
+      others, in source or binary form (linking to this repository is fine);
+   c. use the Software, or any part of it, for commercial purposes;
+   d. remove or alter this licence or any copyright, licence, or attribution
+      notice; or
+   e. use the name "Swivel" or its icon to identify another product.
+
+3. GitHub
+   Viewing and forking this repository on GitHub, as GitHub's Terms of Service
+   allow, is permitted. A fork remains subject to this licence: it may not be
+   modified or distributed beyond what section 1 allows.
+
+4. Third-party components
+   Files under ThirdParty/ (and the notices shipped with the app) remain under
+   their own licences (MIT, BSD-3-Clause, Apache-2.0), which are included in
+   those folders. Nothing in this licence limits the rights those licences
+   grant for those files.
+
+5. Contributions
+   This repository does not accept pull requests or other contributions.
+   Bug reports through Issues are welcome.
+
+6. No warranty
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+   WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+   IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+7. Termination
+   Any use outside these terms ends your permission automatically.

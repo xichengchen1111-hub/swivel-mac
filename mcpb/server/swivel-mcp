@@ -1,0 +1,10 @@
+#!/bin/sh
+# Starts the agent tool server of the Swivel app installed on this Mac. The bundle carries no copy of Swivel: the
+# installed app, with its own signature and settings, does the work. `exec` keeps the host as the server's parent.
+for app in "/Applications/Swivel.app" "$HOME/Applications/Swivel.app" "$HOME/Desktop/Swivel.app"; do
+    if [ -x "$app/Contents/MacOS/Swivel" ]; then
+        exec "$app/Contents/MacOS/Swivel" --mcp
+    fi
+done
+echo "Swivel.app wasn't found in /Applications, ~/Applications or on the Desktop. Install Swivel, then restart this extension." >&2
+exit 1

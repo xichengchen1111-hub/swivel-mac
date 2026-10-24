@@ -1,0 +1,36 @@
+{
+  "manifest_version": "0.3",
+  "name": "swivel",
+  "display_name": "Swivel",
+  "version": "1.12.4",
+  "description": "Convert, compress, rename, move and inspect files on your Mac with Swivel's local tools.",
+  "long_description": "Uses the Swivel app installed on this Mac (in /Applications, ~/Applications or on the Desktop). Everything runs locally and only touches the absolute paths the assistant passes. Anything that writes is planned first and applied on request; new files go next to the originals and never overwrite anything, and every applied change can be undone (created files go to the Trash, renames and moves are put back). Swivel listens on no network port.",
+  "author": { "name": "Swivel" },
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/swivel-mcp",
+    "mcp_config": {
+      "command": "${__dirname}/server/swivel-mcp",
+      "args": [],
+      "env": {}
+    }
+  },
+  "tools": [
+    { "name": "list_actions", "description": "List the conversions and tools Swivel offers for files, as action ids." },
+    { "name": "inspect_files", "description": "Describe files: kind, size, dimensions, page count, word count, duration." },
+    { "name": "extract_text", "description": "Recognize text in images with on-device OCR." },
+    { "name": "read_codes", "description": "Read QR codes and barcodes in images." },
+    { "name": "plan_action", "description": "Plan a conversion or tool (e.g. convert.JPG, tools.Remove BG) and see what it would create." },
+    { "name": "plan_compress", "description": "Plan compressing images or videos to fit a file size." },
+    { "name": "plan_rename", "description": "Plan renaming files in place: base name, find and replace, prefix, suffix, numbering." },
+    { "name": "plan_move", "description": "Plan moving files into a folder on the same disk." },
+    { "name": "apply_plan", "description": "Carry out a plan once; records it in the undo log." },
+    { "name": "undo", "description": "Undo an applied plan: created files go to the Trash, renames and moves go back." },
+    { "name": "history", "description": "List recently applied plans from the undo log." }
+  ],
+  "keywords": ["files", "convert", "images", "pdf", "video", "rename", "compress", "ocr", "macos"],
+  "compatibility": {
+    "platforms": ["darwin"]
+  }
+}
