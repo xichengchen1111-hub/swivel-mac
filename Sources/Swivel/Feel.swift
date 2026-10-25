@@ -65,20 +65,27 @@ final class FrameDriver: NSObject {
     private weak var view: NSView?
     private var link: CADisplayLink?
     private var last: CFTimeInterval = 0
+    /// Host time of the last tick (or of start). A link can stop firing for good — after sleep, a display change or
+    /// its window being ordered out mid-animation — while still existing; without this check every later `start()`
+    /// would be ignored and the view would stay frozen on its first frame (an invisible card or menu).
+    private var lastTick: CFTimeInterval = 0
+    static let stallLimit: CFTimeInterval = 0.25
 
     init(view: NSView) {
         self.view = view
     }
 
-    var isRunning: Bool { link != nil }
+    var isRunning: Bool { link != nil && CACurrentMediaTime() - lastTick <= Self.stallLimit }
 
     func start() {
+        if link != nil, CACurrentMediaTime() - lastTick > Self.stallLimit { stop() }
         guard link == nil, let view, view.window != nil else { return }
         let link = view.displayLink(target: self, selector: #selector(tick(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         self.link = link
         last = 0
+        lastTick = CACurrentMediaTime()
     }
 
     func stop() {
@@ -92,6 +99,7 @@ final class FrameDriver: NSObject {
         let now = link.targetTimestamp
         let dt = last == 0 ? link.targetTimestamp - link.timestamp : min(max(now - last, 1.0 / 240), 1.0 / 30)
         last = now
+        lastTick = CACurrentMediaTime()
         if onFrame?(CGFloat(dt)) != true { stop() }
     }
 }
