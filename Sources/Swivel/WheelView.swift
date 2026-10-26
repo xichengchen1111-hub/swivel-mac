@@ -325,7 +325,8 @@ final class WheelView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window == nil { driver.stop() }
+        // Off screen, or moved into a fresh panel: a display link belongs to the window it was made for.
+        driver.stop()
     }
 
     private func hoverChanged(from old: Int?) {

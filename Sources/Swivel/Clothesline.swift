@@ -26,9 +26,10 @@ final class Clothesline: NSObject {
     }()
 
     private(set) var items: [URL] = []
-    let panel = RopePanel()
+    private(set) var panel = RopePanel()
     private var watches: [DispatchSourceFileSystemObject] = []
     private var settingsObserver: NSObjectProtocol?
+    private var spaceObserver: NSObjectProtocol?
     private(set) var isRunning = false
     private var hoverTimer: Timer?
     private var monitors: [Any] = []
@@ -61,6 +62,14 @@ final class Clothesline: NSObject {
         settingsObserver = NotificationCenter.default.addObserver(forName: Prefs.changed, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.syncWatching(); self?.reconcileScreenshotTakeover() }
         }
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isShown, !self.panel.rope.isLifting else { return }
+                self.showing &+= 1
+                self.confirmShown(self.showing, rebuilt: false)
+            }
+        }
         syncWatching()
         reconcileScreenshotTakeover()
     }
@@ -92,6 +101,7 @@ final class Clothesline: NSObject {
         watches.forEach { $0.cancel() }; watches.removeAll()
         hotKey?.unregister(); hotKey = nil
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver); self.settingsObserver = nil }
+        if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver); self.spaceObserver = nil }
         ScreenshotTakeover.restore()  // first, so a screenshot taken from here on goes straight to the usual folder
         putAwayWaiting(animated: false)
     }
@@ -295,19 +305,106 @@ final class Clothesline: NSObject {
 
     func toggle() {
         // Caught while it's still lifting, the shortcut brings it back instead of hiding it again.
-        if isShown && !panel.rope.isLifting { hide() } else { pinned = true; show() }
+        // A rope the window server isn't showing counts as hidden: pressing once must bring it back.
+        if isShown && !panel.rope.isLifting && Self.reallyShown(panel) { hide() } else { pinned = true; show() }
     }
 
     func show(force: Bool = false) {
-        guard Prefs.clotheslineEnabled, force || !items.isEmpty else { return }
+        guard Prefs.clotheslineEnabled else { return }
+        // Believed down but not really on this screen and Space (see `confirmShown`): `lower` would see a visible
+        // panel and do nothing, so the rope moves into a fresh panel first (even if there's nothing to lower now).
+        var rebuilt = false
+        if panel.isVisible, !panel.rope.isLifting, !panel.rope.isHandlingPrint, !Self.reallyShown(panel) {
+            log.error("Rope was not on screen when asked to show; rebuilding its window: \(CardVisibility(self.panel).summary, privacy: .public)")
+            rebuildPanel()
+            rebuilt = true
+        }
+        guard force || !items.isEmpty else { return }
         guard let screen = screen(containing: NSEvent.mouseLocation) ?? NSScreen.main else { return }
+        let moving = !panel.isVisible || panel.rope.isLifting
         panel.lower(on: screen)
+        showing &+= 1
+        confirmShown(showing, rebuilt: rebuilt, expectFrames: moving)
     }
 
     func hide() {
         pinned = false
         leftSince = nil
+        // A panel the window server isn't showing may never get the frames that finish lifting it, and the next
+        // lowering must not reuse it: swap in a fresh (hidden) one now.
+        // (A lift in progress is left marked as lifting; the fresh panel's next lowering starts from hidden.)
+        if panel.isVisible, !panel.rope.isHandlingPrint, !Self.reallyShown(panel) {
+            log.error("Rope was not on screen when asked to hide; rebuilding its window: \(CardVisibility(self.panel).summary, privacy: .public)")
+            rebuildPanel()
+            return
+        }
         panel.raise()
+    }
+
+    /// Counts lowerings and checks, so a check scheduled for an earlier one does nothing.
+    private var showing = 0
+
+    /// In long sessions the window server has stopped putting Swivel's panels on the current Space although they
+    /// join all Spaces (2026-10-24 for the screenshot card; 2026-10-26 for the rope: screenshots were hung but the
+    /// rope never appeared until Swivel was restarted). A moment after each lowering, and when the Space changes,
+    /// the rope checks it really is on screen and animating; if not, it logs what it found and moves into a new
+    /// panel (or gets a new display link), once. A print being held or dragged off waits until it's let go.
+    func confirmShown(_ generation: Int, rebuilt: Bool, expectFrames: Bool = false, framesSince: Int? = nil) {
+        let framesBefore = framesSince ?? panel.rope.frames
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.checkSeconds) { [weak self] in
+            guard let self, self.isRunning || Self.checksWhileStopped, self.showing == generation, self.isShown,
+                  !self.panel.rope.isLifting, !NSApp.isHidden else { return }
+            if self.panel.rope.isHandlingPrint {
+                self.confirmShown(generation, rebuilt: rebuilt, expectFrames: false)
+                return
+            }
+            let state = CardVisibility(self.panel)
+            if Self.reallyShown(self.panel) {
+                if expectFrames, self.panel.rope.frames == framesBefore {
+                    // A busy main thread can run this before the first frame: look once more before acting.
+                    guard framesSince != nil else {
+                        self.confirmShown(generation, rebuilt: rebuilt, expectFrames: true, framesSince: framesBefore)
+                        return
+                    }
+                    log.error("Rope is on screen but drew no frames; restarting its display link: \(state.summary, privacy: .public)")
+                    self.panel.rope.restartFrames()
+                } else if rebuilt {
+                    log.notice("Rope recovered in a new window: \(state.summary, privacy: .public)")
+                }
+                return
+            }
+            guard !rebuilt else {
+                log.fault("Rope still not on screen after rebuilding its window: \(state.summary, privacy: .public)")
+                return
+            }
+            log.error("Rope was not on screen; rebuilding its window: \(state.summary, privacy: .public)")
+            let screen = self.panel.screen ?? self.screen(containing: NSEvent.mouseLocation) ?? NSScreen.main
+            self.rebuildPanel()
+            if let screen { self.panel.lower(on: screen) }
+            self.showing &+= 1
+            self.confirmShown(self.showing, rebuilt: true, expectFrames: true)
+        }
+    }
+    static let checkSeconds: TimeInterval = 0.4
+    /// Tests run the checks without starting the clothesline's watchers.
+    static var checksWhileStopped = false
+
+    /// On screen (as the window server lists it) and on the Space the user is looking at. While Swivel itself is
+    /// hidden nothing is on screen and nothing needs fixing. Tests replace it.
+    static var reallyShown: (NSWindow) -> Bool = { panel in
+        if NSApp.isHidden { return true }
+        let state = CardVisibility(panel)
+        return state.isShown && state.activeSpace
+    }
+
+    /// Moves the rope, with its prints, into a fresh panel. The new panel starts hidden; `lower` brings it in.
+    func rebuildPanel() {
+        let old = panel
+        let rope = old.rope
+        old.orderOut(nil)
+        old.contentView = nil
+        panel = RopePanel(rope: rope)
+        old.close()
     }
 
     /// A card is being dragged: lower the rope and keep it down until the drag ends.
@@ -345,7 +442,8 @@ final class Clothesline: NSObject {
         let atTopEdge = point.y >= screen.frame.maxY - 2
         let reachedTopEdge = atTopEdge && !wasAtTopEdge
         wasAtTopEdge = atTopEdge
-        if reachedTopEdge && NSEvent.pressedMouseButtons & 1 == 0 && (!isShown || panel.rope.isLifting) {
+        if reachedTopEdge && NSEvent.pressedMouseButtons & 1 == 0
+            && (!isShown || panel.rope.isLifting || !Self.reallyShown(panel)) {
             show()
         }
     }
@@ -671,10 +769,12 @@ private func renderImage(_ size: NSSize, scale: CGFloat, _ draw: (CGContext) -> 
 /// A full-width strip under the menu bar. It only catches the mouse over a print (or while something is being
 /// dragged to it); everywhere else clicks fall through to the windows below.
 final class RopePanel: NSPanel {
-    let rope = RopeView()
+    let rope: RopeView
     static let height: CGFloat = 214
 
-    init() {
+    /// `rope` is passed in when the rope moves into a fresh panel (see `Clothesline.rebuildPanel`), prints and all.
+    init(rope: RopeView = RopeView()) {
+        self.rope = rope
         super.init(contentRect: NSRect(x: 0, y: 0, width: 800, height: Self.height),
                    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         isOpaque = false
@@ -1072,6 +1172,24 @@ final class RopeView: NSView, NSDraggingSource {
         if window?.isVisible == true { driver.start() }
     }
 
+    /// A display link belongs to the window it was made for; moved into a fresh panel, the rope makes a new one.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        driver.stop()
+    }
+
+    /// Display frames drawn so far, so the clothesline can tell a rope that is on screen but never animates.
+    private(set) var frames = 0
+    /// A print is held or being dragged off: moving the rope to a new panel now would drop the gesture. A press
+    /// counts only while the button is down: its mouse-up can go elsewhere (Quick Look takes focus), and a stale
+    /// press must not hold off recovery for good.
+    var isHandlingPrint: Bool { isDraggingItem || (downURL != nil && NSEvent.pressedMouseButtons & 1 != 0) }
+    /// Replaces the frame loop's display link and runs it again.
+    func restartFrames() {
+        driver.stop()
+        wake()
+    }
+
     /// Something happened: the breeze blows for a little while, then dies down.
     private func stir() { calmAt = clock + RopeTuning.breezeHold }
 
@@ -1118,6 +1236,7 @@ final class RopeView: NSView, NSDraggingSource {
     /// Returns false once there is nothing left on screen to animate.
     @discardableResult
     func advance(_ dt: CGFloat) -> Bool {
+        frames &+= 1
         let reduced = isMotionReduced
         updateHover(reduced: reduced)
         if reduced {
@@ -1844,6 +1963,8 @@ final class IncomingCard: NSObject, NSDraggingSource {
     }
     private static let waitSeconds: TimeInterval = 2.5
     private static let resumeSeconds: TimeInterval = 1
+    /// Back from a drag into another app (or dropped nowhere): long enough to drag it somewhere else too.
+    private static let afterDragSeconds: TimeInterval = 5
 
     override init() {
         panel = Self.makePanel()
@@ -1952,7 +2073,9 @@ final class IncomingCard: NSObject, NSDraggingSource {
         dismissal = nil
     }
 
-    func resumeDismissal() { scheduleDismissal(after: Self.resumeSeconds) }
+    func resumeDismissal(afterDrag: Bool = false) {
+        scheduleDismissal(after: afterDrag ? Self.afterDragSeconds : Self.resumeSeconds)
+    }
 
     private func scheduleDismissal(after delay: TimeInterval? = nil) {
         pauseDismissal()
@@ -2123,7 +2246,7 @@ final class IncomingCard: NSObject, NSDraggingSource {
         } else {
             // Copied into an app, or dropped nowhere: the card comes back and waits again.
             view.setDimmed(false)
-            resumeDismissal()
+            resumeDismissal(afterDrag: true)
         }
     }
 }

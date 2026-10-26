@@ -18,7 +18,7 @@ struct WheelItem {
 /// Owns the wheel panel: opens it at the cursor on a key tap, pages it, and runs the dropped-on item.
 @MainActor
 final class WheelController {
-    private let panel = WheelPanel()
+    private(set) var panel = WheelPanel()
     private var toast: Toast { Toast.shared }
     private var mode: WheelMode?
     private var pages: [[WheelItem]] = []
@@ -30,6 +30,15 @@ final class WheelController {
     var isVisible: Bool { panel.isVisible && !panel.isClosing }
 
     init() {
+        wire()
+        // Draw a menu once offscreen so fonts and shadows are cached before the first real one opens.
+        DispatchQueue.main.async {
+            let view = menuPreview(style: .wheel, titles: ["JPG", "PNG", "HEIC", "PDF"], mode: .convert, hovered: 0)
+            if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) { view.cacheDisplay(in: view.bounds, to: rep) }
+        }
+    }
+
+    private func wire() {
         panel.wheel.onDrop = { [weak self] item, urls in self?.perform(item, urls: urls) }
         panel.wheel.onClick = { [weak self] item in self?.perform(item, urls: []) }
         panel.wheel.onCancel = { [weak self] in self?.close(.cancel) }
@@ -38,12 +47,50 @@ final class WheelController {
             guard let self, self.panel.isVisible, !self.panel.isClosing, self.panel.wheel.pressed == nil else { return }
             self.close(.cancel)
         }
-        // Draw a menu once offscreen so fonts and shadows are cached before the first real one opens.
-        DispatchQueue.main.async { [panel] in
-            let view = menuPreview(style: .wheel, titles: ["JPG", "PNG", "HEIC", "PDF"], mode: .convert, hovered: 0)
-            if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) { view.cacheDisplay(in: view.bounds, to: rep) }
-            _ = panel
+    }
+
+    /// The window server has stopped putting Swivel's long-lived panels on the current Space in long sessions,
+    /// although they join all Spaces (the screenshot card and the rope, 2026-10-24/26; restarting fixed it). A moment
+    /// after the menu opens it checks it really is on screen; if not, it logs what it found and reopens in a new
+    /// panel, once.
+    private func confirmShown(rebuilt: Bool = false) {
+        let token = panel.generation
+        let target = panel
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.checkSeconds) { [weak self] in
+            guard let self, self.panel === target, target.generation == token, target.isVisible, !target.isClosing
+            else { return }
+            guard !NSApp.isHidden else { return }
+            let state = CardVisibility(target)
+            if Clothesline.reallyShown(target) {
+                if rebuilt { log.notice("Menu recovered in a new window: \(state.summary, privacy: .public)") }
+                return
+            }
+            guard !rebuilt else {
+                log.fault("Menu still not on screen after rebuilding its window: \(state.summary, privacy: .public)")
+                return
+            }
+            log.error("Menu was not on screen; rebuilding its window: \(state.summary, privacy: .public)")
+            self.rebuildPanel()
+            self.confirmShown(rebuilt: true)
         }
+    }
+    private static let checkSeconds: TimeInterval = 0.15
+
+    /// Moves the menu, items and all, into a fresh panel and opens it there at the same point.
+    func rebuildPanel() {
+        let old = panel
+        let anchor = old.anchor
+        let clickable = old.wheel.isClickable
+        old.hide()
+        old.wheel.removeFromSuperview()
+        panel = WheelPanel(wheel: old.wheel)
+        panel.continueGenerations(after: old)
+        panel.acceptsMouseMovedEvents = old.acceptsMouseMovedEvents
+        old.close()
+        wire()
+        refresh()
+        panel.show(at: anchor)
+        if clickable { panel.makeKey(); panel.makeFirstResponder(panel.wheel) }
     }
 
     func keyTapped(_ newMode: WheelMode, urls: [URL]) {
@@ -73,6 +120,7 @@ final class WheelController {
         panel.wheel.subtitle = urls.count == 1 ? urls[0].lastPathComponent : L("%d files", urls.count)
         refresh()
         panel.show(at: NSEvent.mouseLocation)
+        confirmShown()
     }
 
     /// Keyboard-launched wheels use the same layouts and feedback, with click/arrow/Return selection.
@@ -85,6 +133,7 @@ final class WheelController {
         panel.wheel.subtitle = L("Click or use arrows · Return · Space for next page")
         panel.acceptsMouseMovedEvents = true
         refresh(); panel.show(at: NSEvent.mouseLocation); panel.makeKey(); panel.makeFirstResponder(panel.wheel)
+        confirmShown()
         if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
             MainActor.assumeIsolated { self?.close(.cancel) }
         }) { clickMonitors.append(monitor) }
@@ -182,9 +231,11 @@ final class WheelController {
 }
 
 final class WheelPanel: NSPanel {
-    let wheel = WheelView(frame: NSRect(x: 0, y: 0, width: 320, height: 320))
+    let wheel: WheelView
 
-    init() {
+    /// `wheel` is passed in when the menu moves into a fresh panel (see `WheelController.rebuildPanel`).
+    init(wheel: WheelView = WheelView(frame: NSRect(x: 0, y: 0, width: 320, height: 320))) {
+        self.wheel = wheel
         super.init(contentRect: wheel.frame, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
         isOpaque = false
@@ -260,7 +311,10 @@ final class WheelPanel: NSPanel {
     private(set) var isClosing = false
     /// Changes every time the menu opens or goes away, so stale timers and completions can tell.
     private(set) var generation = 0
-    private var anchor = NSPoint.zero
+    private(set) var anchor = NSPoint.zero
+
+    /// A fresh panel taking over from `old` keeps counting, so a token taken from the old one never matches.
+    func continueGenerations(after old: WheelPanel) { generation = old.generation &+ 1 }
 
     /// A strong ease-out: fades start at once and land softly.
     static let easeOut = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
