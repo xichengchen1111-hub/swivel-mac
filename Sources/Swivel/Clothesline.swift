@@ -26,6 +26,40 @@ final class Clothesline: NSObject {
     }()
 
     private(set) var items: [URL] = []
+    private var stitchedSources: [URL: FileIdentity] = [:] // originals stay on disk; hidden for this session only
+    private var stitchTask: Task<Void, Never>?
+    var isStitching: Bool { stitchTask != nil }
+
+    func stitch(top: URL, bottom: URL) {
+        guard Prefs.clotheslineEnabled, stitchTask == nil, top != bottom,
+              items.contains(top), items.contains(bottom) else { return }
+        let originalIDs = [top, bottom].reduce(into: [URL: FileIdentity]()) { ids, url in
+            if let id = try? FileIdentity.read(url) { ids[url] = id }
+        }
+        Toast.shared.show("Stitching images…", symbol: "photo.on.rectangle", autoHide: false, spinning: true)
+        stitchTask = Task { @MainActor in
+            defer { stitchTask = nil }
+            do {
+                let output = try await Images.detached { try ImageStitch.save(top: top, bottom: bottom) }
+                // A completed file is always kept, even if the feature was turned off at the last instant.
+                if Prefs.clotheslineEnabled, !Task.isCancelled {
+                    stitchedSources.merge(originalIDs) { _, new in new }
+                    panel.rope.markNew(output, arrival: .inPlace)
+                    reload()
+                    show(force: true)
+                    if !pinned { leftSince = Date().addingTimeInterval(2.2) }
+                }
+                Feedback.done()
+                Toast.shared.show(L("Saved %@", output.lastPathComponent), symbol: "checkmark.circle.fill", files: [output])
+            } catch is CancellationError {
+                Toast.shared.hide()
+            } catch {
+                Feedback.refuse()
+                Toast.shared.show(error.localizedDescription, symbol: "exclamationmark.triangle.fill", tint: .systemRed)
+            }
+        }
+    }
+
     private(set) var panel = RopePanel()
     private var watches: [DispatchSourceFileSystemObject] = []
     private var settingsObserver: NSObjectProtocol?
@@ -81,7 +115,7 @@ final class Clothesline: NSObject {
     /// Turning the feature off puts the rope and any waiting card away, stops hanging copies and gives screenshots
     /// back to macOS.
     func setEnabled(_ on: Bool) {
-        if !on { hide() }
+        if !on { stitchTask?.cancel(); panel.rope.clearStitchTarget(); hide() }
         Prefs.clotheslineEnabled = on  // posts Prefs.changed, which starts or stops watching the pointer
         if on {
             if Prefs.clotheslineTakeover { ScreenshotTakeover.enable(into: incoming) }
@@ -97,6 +131,8 @@ final class Clothesline: NSObject {
     func stop() {
         guard isRunning else { return }
         isRunning = false
+        stitchTask?.cancel()
+        panel.rope.clearStitchTarget()
         stopWatching()
         watches.forEach { $0.cancel() }; watches.removeAll()
         hotKey?.unregister(); hotKey = nil
@@ -122,6 +158,8 @@ final class Clothesline: NSObject {
         if on && hoverTimer == nil {
             startWatching()
         } else if !on && hoverTimer != nil {
+            stitchTask?.cancel()
+            panel.rope.clearStitchTarget()
             stopWatching()
             if isShown && !panel.rope.isLifting { hide() }
         }
@@ -186,7 +224,13 @@ final class Clothesline: NSObject {
     }
 
     func reload() {
-        items = mediaFiles(in: folder)
+        items = mediaFiles(in: folder).filter { url in
+            guard let recorded = stitchedSources[url] else { return true }
+            if (try? FileIdentity.read(url)) == recorded { return false }
+            // A different file later reusing an original's name must still appear on the rope.
+            stitchedSources.removeValue(forKey: url)
+            return true
+        }
         panel.rope.setItems(items)
         if items.isEmpty && !isReceiving { hide() }
     }
@@ -831,6 +875,7 @@ final class RopeView: NSView, NSDraggingSource {
         let chip = CALayer()           // "Copied"
         var size: CGSize
         var image: CGImage?
+        var photo: CGImage?
         var placed = false
         var slot = Spring(0, response: RopeTuning.slide.response, damping: RopeTuning.slide.damping)  // x along the rope
         var tilt: CGFloat = 0          // resting angle, so the line doesn't look ruled
@@ -857,6 +902,13 @@ final class RopeView: NSView, NSDraggingSource {
 
     private let root = CALayer()
     private let ropeLayer = CAShapeLayer()
+    private let stitchLayer = CALayer()
+    private let stitchHint = CALayer()
+    private var stitchSpring = Spring(0, response: 0.25, damping: 0.85)
+    private(set) var stitchIntent = RopeStitchIntent()
+    private var stitchReady = false
+    private var stitchSize = CGSize.zero
+
     private var prints: [Print] = []
     private var arrivals: [URL: Arrival] = [:]
     private var thumbnails: [URL: CGImage] = [:]      // handed over by the card so the print needn't decode again
@@ -910,6 +962,20 @@ final class RopeView: NSView, NSDraggingSource {
         ropeLayer.shadowRadius = 2
         ropeLayer.shadowOffset = CGSize(width: 0, height: 2)
         root.addSublayer(ropeLayer)
+        stitchLayer.zPosition = 30
+        stitchLayer.anchorPoint = CGPoint(x: 0.5, y: 0)
+        stitchLayer.contentsScale = 2
+        stitchLayer.borderWidth = 2
+        stitchLayer.borderColor = NSColor.controlAccentColor.cgColor
+        stitchLayer.cornerRadius = 3
+        stitchLayer.shadowOpacity = 0.25
+        stitchLayer.shadowRadius = 6
+        stitchLayer.opacity = 0
+        ropeLayer.addSublayer(stitchLayer)
+        stitchHint.zPosition = 31
+        stitchHint.contentsScale = 2
+        stitchHint.opacity = 0
+        ropeLayer.addSublayer(stitchHint)
         registerForDraggedTypes([.fileURL])
         colorsObserver = NotificationCenter.default.addObserver(forName: Prefs.changed, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshColors() }
@@ -941,6 +1007,7 @@ final class RopeView: NSView, NSDraggingSource {
     func setItems(_ urls: [URL]) {
         let urls = urls.filter { !departing.contains($0) }
         let wanted = Set(urls)
+        if let target = stitchIntent.target, !wanted.contains(target) { clearStitchTarget() }
         let existing = Dictionary(prints.map { ($0.url, $0) }, uniquingKeysWith: { a, _ in a })
         for print in prints where !wanted.contains(print.url) { retire(print) }
         var fresh: [Print] = []
@@ -1007,6 +1074,7 @@ final class RopeView: NSView, NSDraggingSource {
         let size = thumb.map { RopeTuning.printSize(aspect: CGFloat($0.width) / CGFloat(max($0.height, 1))) }
             ?? CGSize(width: 160, height: 110)
         let print = Print(url: url, size: size)
+        print.photo = isMovie ? nil : thumb
         print.image = Self.renderPrint(thumb, size: size, movie: isMovie)
 
         let layer = print.layer
@@ -1154,6 +1222,7 @@ final class RopeView: NSView, NSDraggingSource {
 
     /// Pulled back up; the prints trail a little behind. Under Reduce Motion it fades out where it is.
     func lift(_ done: @escaping () -> Void) {
+        clearStitchTarget()
         isLifting = true
         onLifted = done
         if isMotionReduced {
@@ -1209,7 +1278,8 @@ final class RopeView: NSView, NSDraggingSource {
         let reduced = isMotionReduced
         let charging = downURL != nil && !handled && !closeDown   // a held print gathers toward Quick Look
         let blowing = !reduced && (clock < calmAt || !breeze.isSettled)
-        if isLifting || charging || blowing || !fade.isSettled || !highlight.isSettled { return true }
+        if isLifting || charging || blowing || !fade.isSettled || !highlight.isSettled
+            || !stitchSpring.isSettled || (stitchIntent.target != nil && !stitchReady) { return true }
         let still: CGFloat = 0.01   // points (and points per second): well below a pixel
         if abs(offset - offsetTarget) > still || abs(offsetV) > still || abs(sag) > still || abs(sagV) > still { return true }
         return prints.contains { print in
@@ -1239,6 +1309,13 @@ final class RopeView: NSView, NSDraggingSource {
         frames &+= 1
         let reduced = isMotionReduced
         updateHover(reduced: reduced)
+        let ready = stitchIntent.ready(at: CACurrentMediaTime())
+        if ready != stitchReady {
+            stitchReady = ready
+            if ready { Feedback.hover(sound: false); setStitchHint("Release to stitch · Originals kept") }
+        }
+        if reduced { stitchSpring.snap(stitchSpring.target) }
+        else { stitchSpring.step(dt, tuning: Prefs.interaction.clothesline) }
         if reduced {
             breeze.snap(0)
         } else {
@@ -1318,7 +1395,7 @@ final class RopeView: NSView, NSDraggingSource {
         if now != hovered {
             hovered = now
             stir()
-            toolTip = now.map { $0.lastPathComponent + "\n" + L("Click: copy · Double-click: open · Hold: Quick Look · Drag: take it down") }
+            toolTip = now.map { $0.lastPathComponent + "\n" + L("Click: copy · Double-click: open · Hold: Quick Look · Drag: take it down") + "\n" + L("Drag onto another photo to stitch vertically.") }
         }
         for print in prints {
             let on = print.url == hovered
@@ -1361,7 +1438,8 @@ final class RopeView: NSView, NSDraggingSource {
             print.layer.position = CGPoint(x: x, y: ropeY(x) + 4 + print.lift.value + print.drop + sink)
             let scale = reduced ? 1 : 1 + RopeTuning.hoverScale * p - RopeTuning.pressScale * press + RopeTuning.chargeScale * charge
             print.layer.transform = CATransform3DScale(CATransform3DMakeRotation(print.angle, 0, 0, 1), scale, scale, 1)
-            print.layer.opacity = Float(print.awaitingSince == nil ? print.opacity.value : 0)
+            let stitching = print.url == stitchIntent.target ? min(max(stitchSpring.value, 0), 1) : 0
+            print.layer.opacity = Float(print.awaitingSince == nil ? print.opacity.value * (1 - stitching) : 0)
             // Coming toward you on hover, pressed flat against the rope on mouse-down.
             print.layer.shadowRadius = max(6 + 3 * p - 4 * press, 1.5)
             print.layer.shadowOffset = CGSize(width: 0, height: max(4 + 3 * p - 2.5 * press, 1))
@@ -1379,6 +1457,18 @@ final class RopeView: NSView, NSDraggingSource {
             }
             // Stays on top while it settles back, so it doesn't slip behind a neighbour mid-way.
             print.layer.zPosition = p > 0.05 || press > 0.01 ? 10 : 0
+        }
+        let join = min(max(stitchSpring.value, 0), 1)
+        ropeLayer.zPosition = join > 0.001 ? 20 : 0
+        stitchLayer.opacity = Float(join)
+        stitchHint.opacity = Float(join)
+        if let target = stitchIntent.target.flatMap(find) {
+            let x = target.slot.value
+            stitchLayer.bounds = CGRect(origin: .zero, size: stitchSize)
+            stitchLayer.position = CGPoint(x: x + (reduced ? 0 : 12 * (1 - join)), y: ropeY(x) + 4)
+            let scale: CGFloat = reduced ? 1 : 0.92 + 0.08 * join
+            stitchLayer.transform = CATransform3DMakeScale(scale, scale, 1)
+            stitchHint.position = CGPoint(x: x, y: ropeY(x) + stitchSize.height + 18)
         }
         if let window, abs(window.alphaValue - fade.value) > 0.001 { window.alphaValue = fade.value }
         CATransaction.commit()
@@ -1756,10 +1846,11 @@ final class RopeView: NSView, NSDraggingSource {
 
     // Into an app: a copy (the original stays). Into a folder: moved off the rope. Onto the Trash: discarded.
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        context == .outsideApplication ? [.copy, .move, .generic, .delete] : []
+        context == .outsideApplication ? [.copy, .move, .generic, .delete] : [.copy]
     }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        clearStitchTarget()
         isDraggingItem = false
         let url = downURL
         downURL = nil
@@ -1818,10 +1909,59 @@ final class RopeView: NSView, NSDraggingSource {
     }
 
     private func operation(_ info: NSDraggingInfo) -> NSDragOperation {
+        if info.draggingSource as? RopeView === self {
+            setReceivingHighlight(nil)
+            guard let source = downURL, info.draggingSourceOperationMask.contains(.copy),
+                  !Clothesline.shared.isStitching, Prefs.clotheslineEnabled else {
+                clearStitchTarget()
+                updateDraggingItemsForDrag(info)
+                return []
+            }
+            updateStitchTarget(source: source, point: convert(info.draggingLocation, from: nil))
+            updateDraggingItemsForDrag(info)
+            return stitchIntent.target == nil ? [] : .copy
+        }
+        clearStitchTarget()
         let urls = acceptable(info)
         let operation = RopeDropFeedback.operation(offered: info.draggingSourceOperationMask, acceptsMedia: !urls.isEmpty)
         setReceivingHighlight(operation.isEmpty ? nil : urls.first)
         return operation
+    }
+
+    /// Internal rope-to-rope gestures only; Finder drops keep their ordinary hanging behaviour.
+    func updateStitchTarget(source: URL, point: NSPoint, now: CFTimeInterval = CACurrentMediaTime()) {
+        guard ImageStitch.supports(source), let bottom = find(source)?.photo, !isLifting else {
+            clearStitchTarget(); return
+        }
+        let target = prints.reversed().first { print in
+            guard print.url != source, print.isTouchable, ImageStitch.supports(print.url), print.photo != nil else { return false }
+            let local = print.layer.convert(point, from: root)
+            return print.layer.bounds.insetBy(dx: print.size.width * 0.12, dy: print.size.height * 0.12).contains(local)
+        }
+        guard let target, let top = target.photo else { clearStitchTarget(); return }
+        guard stitchIntent.target != target.url else { return }
+        guard let image = try? ImageStitch.render(top: top, bottom: bottom) else { clearStitchTarget(); return }
+        stitchIntent.update(target.url, now: now)
+        stitchReady = false
+        stitchSize = RopeTuning.printSize(aspect: CGFloat(image.width) / CGFloat(image.height))
+        stitchLayer.contents = Self.renderPrint(image, size: stitchSize, movie: false)
+        stitchSpring.target = 1
+        setStitchHint("Hold briefly to stitch")
+        wake()
+    }
+
+    private func setStitchHint(_ text: String) {
+        let image = Self.chipImage(L(text))
+        stitchHint.contents = image
+        stitchHint.bounds = CGRect(origin: .zero, size: image.map { CGSize(width: CGFloat($0.width) / 2, height: CGFloat($0.height) / 2) } ?? .zero)
+    }
+
+    func clearStitchTarget() {
+        stitchIntent.update(nil, now: CACurrentMediaTime())
+        stitchReady = false
+        stitchSpring.target = 0
+        // Keep the image for its fade, but immediately restore the target and cancel the commit.
+        wake()
     }
 
     /// Crossing onto the rope engages it: the cord lights up and dips, the trackpad gives a detent, and room opens
@@ -1842,17 +1982,33 @@ final class RopeView: NSView, NSDraggingSource {
         wake()
     }
 
+    override func updateDraggingItemsForDrag(_ sender: NSDraggingInfo?) {
+        guard let sender, sender.draggingSource as? RopeView === self, let url = downURL, let print = find(url) else { return }
+        // The composed preview takes over from the floating print. Destination-only changes are restored by
+        // AppKit on exit, so dragging onward into Finder or another app keeps the original file/image.
+        let image = stitchIntent.target == nil ? print.image.map { NSImage(cgImage: $0, size: print.size) } : nil
+        sender.enumerateDraggingItems(options: [], for: self, classes: [NSURL.self],
+                                      searchOptions: [.urlReadingFileURLsOnly: true]) { item, _, _ in
+            item.setDraggingFrame(item.draggingFrame, contents: image)
+        }
+    }
+
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { operation(sender) }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { operation(sender) }
-    override func draggingExited(_ sender: NSDraggingInfo?) { setReceivingHighlight(nil) }
+    override func draggingExited(_ sender: NSDraggingInfo?) { clearStitchTarget(); setReceivingHighlight(nil) }
 
     override func draggingEnded(_ sender: NSDraggingInfo) {
+        clearStitchTarget()
         // A drop keeps its gap until the print arrives (setItems closes it); a cancelled drag closes it now.
         if receivingHighlight { setReceivingHighlight(nil) }
     }
 
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard !operation(sender).isEmpty else { return false }
+        if sender.draggingSource as? RopeView === self {
+            sender.animatesToDestination = false
+            return stitchIntent.ready(at: CACurrentMediaTime())
+        }
         // Let the system slide the drag image into its slot at the front of the rope (see performDragOperation).
         sender.animatesToDestination = !isMotionReduced
         return true
@@ -1860,6 +2016,14 @@ final class RopeView: NSView, NSDraggingSource {
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard !operation(sender).isEmpty else { return false }
+        if sender.draggingSource as? RopeView === self {
+            guard let top = stitchIntent.target, let bottom = downURL,
+                  stitchIntent.ready(at: CACurrentMediaTime()) else { clearStitchTarget(); return false }
+            clearStitchTarget()
+            Feedback.press()
+            Clothesline.shared.stitch(top: top, bottom: bottom)
+            return true
+        }
         let urls = acceptable(sender)
         if sender.animatesToDestination {
             var x = RopeTuning.firstSlot

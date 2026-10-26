@@ -56,6 +56,11 @@ func L(_ english: String, _ args: CVarArg...) -> String {
 /// English → [简体中文, 繁體中文, 日本語].
 enum Strings {
     static let table: [String: [String]] = [
+        "Drag onto another photo to stitch vertically.": ["拖到另一张照片上，即可上下拼接。", "拖到另一張照片上，即可上下拼接。", "別の写真に重ねて縦に結合します。"],
+        "Choose two still images to stitch.": ["请选择两张静态图片进行拼接。", "請選擇兩張靜態圖片進行拼接。", "結合する静止画像を2枚選んでください。"],
+        "Stitching images…": ["正在拼接图片…", "正在拼接圖片…", "画像を結合中…"],
+        "Hold briefly to stitch": ["稍作停留即可拼接", "稍作停留即可拼接", "少し重ねて結合"],
+        "Release to stitch · Originals kept": ["松手拼接 · 原图保留", "放開拼接 · 保留原圖", "放して結合 · 元画像は保持"],
         // File integrity and conversion fidelity
         "This soundtrack exceeds the precision supported by video-to-WAV export. Keep or export its original audio track.": ["此音轨的精度超过视频转 WAV 的支持范围，请保留或导出原始音轨。", "此音軌的精度超過影片轉 WAV 的支援範圍，請保留或匯出原始音軌。", "この音声トラックの精度は動画から WAV への書き出しの対応範囲を超えています。元の音声トラックを保持または書き出してください。"],
         "The image is incomplete or damaged.": ["图片不完整或已损坏。", "圖片不完整或已損壞。", "画像が不完全か、壊れています。"],
