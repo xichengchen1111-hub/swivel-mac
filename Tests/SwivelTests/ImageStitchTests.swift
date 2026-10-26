@@ -30,6 +30,121 @@ struct ImageStitchTests {
         #expect(!intent.ready(at: 20.1))
     }
 
+    @Test func anEngagedPreviewToleratesSmallPointerMovementWithoutWideningInitialEntry() {
+        let bounds = CGRect(x: 0, y: 0, width: 160, height: 100)
+        let edge = CGPoint(x: 10, y: 50)
+        #expect(!RopeStitchIntent.hitArea(in: bounds, engaged: false).contains(edge))
+        #expect(RopeStitchIntent.hitArea(in: bounds, engaged: true).contains(edge))
+        #expect(!RopeStitchIntent.hitArea(in: bounds, engaged: true).contains(CGPoint(x: -1, y: 50)))
+    }
+
+    @Test func jellyFillsItsWaistAndSettlesWithOneSmallRebound() {
+        let bounds = CGRect(x: 0, y: 0, width: 100, height: 120)
+        let contact = RopeStitchJelly.outline(in: bounds, seam: 0.5, progress: 0)
+        let merged = RopeStitchJelly.outline(in: bounds, seam: 0.5, progress: 1)
+        #expect(!contact.contains(CGPoint(x: 5, y: 60)))
+        #expect(merged.contains(CGPoint(x: 5, y: 60)))
+        for seam: CGFloat in [0.01, 0.5, 0.99] {
+            for step in 0...20 {
+                let path = RopeStitchJelly.outline(in: bounds, seam: seam, progress: CGFloat(step) / 20)
+                #expect(bounds.contains(path.boundingBoxOfPath))
+            }
+        }
+        var spring = Spring(0, response: RopeStitchJelly.response, damping: RopeStitchJelly.damping)
+        spring.target = 1
+        var peak: CGFloat = 0
+        for _ in 0..<240 {
+            spring.step(1 / 240)
+            peak = max(peak, spring.value)
+            let pulse = sin(.pi * spring.value)
+            #expect(1 + 0.1 * pulse >= 0.98 && 1 + 0.1 * pulse <= 1.101)
+            #expect(1 - 0.06 * pulse >= 0.939 && 1 - 0.06 * pulse <= 1.02)
+        }
+        #expect(peak > 1 && peak < 1.06)
+        #expect(abs(spring.value - 1) < 0.001)
+        #expect(RopeStitchJelly.damping >= 0.6)
+    }
+
+    @Test @MainActor func cancellationCrossfadesBackAndCommitSurvivesDragCleanup() throws {
+        let a = URL(fileURLWithPath: "/tmp/feel-a.png"), b = URL(fileURLWithPath: "/tmp/feel-b.png")
+        let output = URL(fileURLWithPath: "/tmp/feel-stitched.png")
+        let thumb = try image(100, 60, CGColor(gray: 0.5, alpha: 1))
+        for reduced in [false, true] {
+            let view = RopeView(frame: CGRect(x: 0, y: 0, width: 1000, height: 230))
+            view.reducedMotionOverride = reduced
+            for url in [a, b] { view.markNew(url, arrival: .inPlace, thumbnail: thumb) }
+            view.setItems([a, b])
+            view.drop(fromHidden: true)
+            for _ in 0..<240 { _ = view.advance(1 / 120) }
+            let layers = view.layer?.sublayers ?? []
+            let match = layers.first { $0.contents != nil && $0.position.x > 200 }
+            let target = try #require(match)
+            let source = try #require(layers.first { $0.contents != nil && $0.position.x < 200 })
+            let point = target.convert(CGPoint(x: target.bounds.midX, y: target.bounds.midY), to: view.layer)
+            view.updateStitchTarget(source: a, point: point)
+            for _ in 0..<100 { _ = view.advance(1 / 120) }
+            #expect(target.opacity < 0.01)
+            // The wider exit area retains the selected target and its original dwell timestamp.
+            let edge = target.convert(CGPoint(x: 10, y: 40), to: view.layer)
+            view.updateStitchTarget(source: a, point: edge)
+            #expect(view.stitchIntent.target == b)
+            view.clearStitchTarget()
+            #expect(view.stitchIntent.target == nil) // commit cancels immediately, before the reverse animation
+            _ = view.advance(1 / 120)
+            if !reduced { #expect(target.opacity < 0.2) } // no one-frame flash of the original
+            for _ in 0..<100 { _ = view.advance(1 / 120) }
+            #expect(target.opacity > 0.99)
+
+            view.updateStitchTarget(source: a, point: point)
+            for _ in 0..<100 { _ = view.advance(1 / 120) }
+            view.commitStitchPreview()
+            view.clearStitchTarget() // both AppKit draggingEnded callbacks must leave the pending result visible
+            #expect(view.isCommittingStitch && view.isHandlingPrint)
+            for _ in 0..<100 { _ = view.advance(1 / 120) }
+            #expect(source.opacity < 0.01 && target.opacity < 0.01)
+            if reduced { #expect(!view.needsFrames) } // an export waiting on disk must not spin an idle display link
+            let overlay = try #require(view.layer?.sublayers?.first?.sublayers?.first)
+            let previewPosition = overlay.position
+            view.markNew(output, arrival: .inPlace, thumbnail: try ImageStitch.render(top: thumb, bottom: thumb))
+            view.finishStitchPreview(output: output)
+            view.setItems([output])
+            #expect(!view.isCommittingStitch)
+            let result = try #require(view.layer?.sublayers?.last)
+            let firstPosition = result.position
+            if reduced {
+                #expect(firstPosition.x < previewPosition.x - 50)
+            } else {
+                #expect(abs(firstPosition.x - previewPosition.x) < 0.01)
+                #expect(abs(firstPosition.y - previewPosition.y) < 0.01)
+            }
+            for _ in 0..<240 { _ = view.advance(1 / 120) }
+            #expect(result.opacity > 0.99)
+            if reduced { #expect(result.position == firstPosition) }
+            #expect(result.position.x < previewPosition.x - 50) // slides to its new slot from the merge, not vice versa
+        }
+    }
+
+    @Test @MainActor func aFailedOrDisabledCommitRestoresBothOriginalPrints() throws {
+        let a = URL(fileURLWithPath: "/tmp/recover-a.png"), b = URL(fileURLWithPath: "/tmp/recover-b.png")
+        let thumb = try image(100, 60, CGColor(gray: 0.5, alpha: 1))
+        let view = RopeView(frame: CGRect(x: 0, y: 0, width: 1000, height: 230))
+        view.reducedMotionOverride = true
+        for url in [a, b] { view.markNew(url, arrival: .inPlace, thumbnail: thumb) }
+        view.setItems([a, b]); view.drop(fromHidden: true)
+        for _ in 0..<240 { _ = view.advance(1 / 120) }
+        let layers = view.layer?.sublayers ?? []
+        let target = try #require(layers.first { $0.contents != nil && $0.position.x > 200 })
+        let point = target.convert(CGPoint(x: target.bounds.midX, y: target.bounds.midY), to: view.layer)
+        for force in [false, true] {
+            view.updateStitchTarget(source: a, point: point)
+            view.commitStitchPreview(); _ = view.advance(1 / 60)
+            if force { view.clearStitchTarget(force: true) } else { view.finishStitchPreview() }
+            for _ in 0..<240 { _ = view.advance(1 / 120) }
+            #expect(!view.isCommittingStitch && view.stitchIntent.target == nil)
+            #expect(layers.filter { $0.contents != nil }.allSatisfy { $0.opacity > 0.99 })
+        }
+    }
+
     @Test func matchesWidthsWithoutCroppingOrEnlargementAndBoundsTheCanvas() throws {
         let s = try ImageStitch.size(top: CGSize(width: 400, height: 200), bottom: CGSize(width: 200, height: 300))
         #expect(s.width == 200 && s.top == 100 && s.bottom == 300)

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "swivel",
   "display_name": "Swivel",
-  "version": "1.13.0",
+  "version": "1.13.1",
   "description": "Convert, compress, rename, move and inspect files on your Mac with Swivel's local tools.",
   "long_description": "Uses the Swivel app installed on this Mac (in /Applications, ~/Applications or on the Desktop). Everything runs locally and only touches the absolute paths the assistant passes. Anything that writes is planned first and applied on request; new files go next to the originals and never overwrite anything, and every applied change can be undone (created files go to the Trash, renames and moves are put back). Swivel listens on no network port.",
   "author": { "name": "Swivel" },
