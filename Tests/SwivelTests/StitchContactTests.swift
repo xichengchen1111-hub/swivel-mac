@@ -69,6 +69,27 @@ struct StitchContactTests {
         #expect(!view.stitchIntent.ready(at: CACurrentMediaTime()))
     }
 
+    @Test func photoPixelsStretchOnlyInTheJoiningBand() throws {
+        let (view, a, b, _, _) = try scene()
+        let near = CGPoint(x: b.frame.midX, y: b.frame.maxY + a.bounds.height / 2 + 15)
+        view.updateStitchTarget(source: source, point: near)
+        for _ in 0..<180 { _ = view.advance(1 / 120) }
+        #expect(view.stitchIntent.target == nil && !view.isCommittingStitch)
+        let overlay = try #require(view.layer?.sublayers?.first?.sublayers?.first)
+        let bodies = try #require(overlay.sublayers)
+        let top = bodies[1], bottom = bodies[2]
+        let photo = try #require(top.sublayers?.first)
+        let flow = try #require(top.sublayers?.last)
+        #expect(!flow.isHidden && flow.contents != nil)
+        #expect(flow.frame.maxY > photo.frame.maxY + 5)
+        #expect(photo.mask != nil) // edge pixels are exclusively drawn by the warped band
+        let clip = try #require(photo.mask as? CAShapeLayer)
+        #expect(clip.path?.contains(CGPoint(x: photo.bounds.midX, y: 10)) == true)
+        #expect(clip.path?.contains(CGPoint(x: photo.bounds.midX, y: photo.bounds.maxY - 1)) == false)
+        #expect(abs(top.frame.maxY - bottom.frame.minY) < 0.01) // shared physical neck, before release
+        #expect(CATransform3DIsIdentity(top.transform) && CATransform3DIsIdentity(bottom.transform))
+    }
+
     @Test func heldEdgeIsAlreadyOneContourAndReleaseDoesNotRejoin() throws {
         for reduced in [false, true] {
             let (view, a, b, _, _) = try scene()
@@ -153,7 +174,7 @@ struct StitchContactTests {
         for below in [false, true] {
             let (view, a, b, first, second) = try scene()
             let url = folder.appendingPathComponent(below ? "contact-below.gif" : "contact-side.gif")
-            let gif = try #require(CGImageDestinationCreateWithURL(url as CFURL, UTType.gif.identifier as CFString, 200, nil))
+            let gif = try #require(CGImageDestinationCreateWithURL(url as CFURL, UTType.gif.identifier as CFString, 220, nil))
             CGImageDestinationSetProperties(gif, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
             let from = below ? CGPoint(x: b.frame.midX, y: b.frame.maxY + a.bounds.height / 2 + 24)
                 : CGPoint(x: a.frame.midX, y: a.frame.midY)
@@ -164,14 +185,17 @@ struct StitchContactTests {
                 _ = try Images.save(second, as: folder.appendingPathComponent("fixture-b.png"), type: .png, quality: 1)
             }
             view.onStitchHandoff = { [weak view] in view?.setItems([output]) }
-            for frame in 0..<200 {
-                if frame >= 10 && frame < 112 {
-                    let t = min(CGFloat(frame - 10) / 36, 1)
+            for frame in 0..<220 {
+                if frame >= 10 && frame < 132 {
+                    let near = CGPoint(x: to.x, y: to.y + 15)
+                    let approaching = frame < 62
+                    let t = approaching ? min(CGFloat(frame - 10) / 24, 1) : min(CGFloat(frame - 62) / 30, 1)
                     let eased = t * t * (3 - 2 * t)
-                    view.updateStitchTarget(source: source, point: CGPoint(x: from.x + (to.x - from.x) * eased, y: from.y + (to.y - from.y) * eased), now: 0)
+                    let start = approaching ? from : near, end = approaching ? near : to
+                    view.updateStitchTarget(source: source, point: CGPoint(x: start.x + (end.x - start.x) * eased, y: start.y + (end.y - start.y) * eased), now: 0)
                 }
-                if frame == 112 { view.commitStitchPreview() }
-                if frame == 113 {
+                if frame == 132 { view.commitStitchPreview() }
+                if frame == 133 {
                     view.markNew(output, arrival: .inPlace, thumbnail: merged)
                     view.finishStitchPreview(output: output)
                 }
@@ -183,7 +207,7 @@ struct StitchContactTests {
                 view.layer?.render(in: ctx)
                 let image = try #require(ctx.makeImage())
                 CGImageDestinationAddImage(gif, image, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 0.02]] as CFDictionary)
-                if [18, 36, 60, 100, 112, 130, 160].contains(frame) {
+                if [18, 36, 60, 90, 120, 132, 150, 180].contains(frame) {
                     _ = try Images.save(image, as: folder.appendingPathComponent("\(below ? "below" : "side")-\(frame).png"), type: .png, quality: 1)
                 }
             }

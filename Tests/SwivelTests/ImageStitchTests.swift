@@ -38,7 +38,7 @@ struct ImageStitchTests {
         #expect(!RopeStitchIntent.hitArea(in: bounds, engaged: true).contains(CGPoint(x: -1, y: 50)))
     }
 
-    @Test func onlyTheJoiningEdgesBendAndHeldContactAlreadyAttaches() {
+    @Test func joiningEdgesStretchIntoOneSurfaceBeforeRelease() {
         let top = CGRect(x: 0, y: 0, width: 180, height: 120)
         let dragged = CGRect(x: 8, y: 140, width: 180, height: 120)
         #expect(RopeStitchJelly.gap(top, dragged) == 20)
@@ -51,15 +51,19 @@ struct ImageStitchTests {
         let edgeJoin = RopeStitchJelly.attached(wide, below: narrow, strength: 1, within: canvas)
         #expect(canvas.contains(edgeJoin) && edgeJoin.minY == narrow.maxY)
         #expect(edgeJoin.size == wide.size)
-        let bridge = RopeStitchJelly.bridge(top, attached, strength: 1)
-        #expect(bridge?.contains(CGPoint(x: 90, y: 120)) == true)
-        #expect(bridge?.contains(CGPoint(x: 1, y: 120)) == false) // shallow inward arc at seam
-        #expect(bridge!.boundingBoxOfPath.height <= 20)
-        #expect(RopeStitchJelly.bridge(top, attached, strength: 0) == nil)
-        let body = RopeStitchJelly.bodyPath(in: top, seamAtBottom: true, radius: 10)
-        #expect(body.contains(CGPoint(x: 2, y: 2))) // far corners stay almost square
-        #expect(!body.contains(CGPoint(x: 1, y: 119))) // only the seam corners bend
-        #expect(body.contains(CGPoint(x: 1, y: 60)))
+        let separated = CGRect(x: 0, y: 136, width: 180, height: 120)
+        let early = RopeStitchJelly.melt(top: top, bottom: separated, strength: 0.15)
+        let melting = RopeStitchJelly.melt(top: top, bottom: separated, strength: 0.6)
+        #expect(early.offset(at: 90) < 8)
+        #expect(melting.offset(at: 90) == 8) // both image surfaces meet in the middle
+        #expect(melting.offset(at: 15) < 1) // the connection spreads from the centre
+        #expect(melting.path(upper: true).contains(CGPoint(x: 90, y: 127.9)))
+        #expect(melting.path(upper: false).contains(CGPoint(x: 90, y: 128.1)))
+        #expect(melting.path(upper: true).contains(CGPoint(x: 2, y: 2)))
+        #expect(melting.path(upper: true).contains(CGPoint(x: 1, y: 60)))
+        let joined = RopeStitchJelly.melt(top: top, bottom: attached, strength: 1)
+        #expect(joined.extent == 0)
+        #expect(joined.path(upper: true).contains(CGPoint(x: 1, y: 119)))
         #expect(RopeStitchJelly.touchesSeam(attached, below: top, engaged: false))
         #expect(!RopeStitchJelly.touchesSeam(dragged, below: top, engaged: false))
         #expect(!RopeStitchJelly.touchesSeam(attached.offsetBy(dx: 100, dy: 0), below: top, engaged: true))
@@ -70,6 +74,33 @@ struct ImageStitchTests {
         #expect(peak > 1 && peak < 1.06)
         #expect(abs(spring.value - 1) < 0.001)
         #expect(RopeStitchJelly.damping >= 0.6)
+    }
+
+    @Test func warpedEdgeBandsUseFacingRowsAndPreservePremultipliedAlpha() throws {
+        let context = try #require(CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
+                                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(NSColor(srgbRed: 0, green: 0, blue: 1, alpha: 0.5).cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: 64, height: 32))
+        context.setFillColor(NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 0.5).cgColor)
+        context.fill(CGRect(x: 0, y: 32, width: 64, height: 32))
+        let input = try #require(context.makeImage())
+        let texture = try #require(RopeStitchJelly.Texture(input))
+        let top = CGRect(x: 0, y: 0, width: 64, height: 64)
+        let bottom = CGRect(x: 0, y: 80, width: 64, height: 64)
+        let surface = RopeStitchJelly.melt(top: top, bottom: bottom, strength: 0.6)
+        for upper in [true, false] {
+            let band = try #require(texture.band(photo: CGRect(x: 0, y: 0, width: 64, height: 64),
+                                                 bodyOrigin: CGPoint(x: 0, y: upper ? 0 : 72),
+                                                 surface: surface, upper: upper, scale: 2))
+            let bytes = try #require(band.image.dataProvider?.data) as Data
+            let middle = ((band.image.height / 2) * band.image.width + band.image.width / 2) * 4
+            let red = Int(bytes[middle]), blue = Int(bytes[middle + 2]), alpha = Int(bytes[middle + 3])
+            #expect(abs(alpha - 128) <= 1) // no opaque conversion or double alpha composition
+            if upper { #expect(blue > 120 && red < 2) }
+            else { #expect(red > 120 && blue < 2) }
+            #expect(band.image.width <= 128 && band.image.height < 72)
+        }
     }
 
     @Test @MainActor func cancellationCrossfadesBackAndCommitSurvivesDragCleanup() throws {

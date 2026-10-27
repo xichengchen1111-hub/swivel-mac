@@ -931,7 +931,13 @@ final class RopeView: NSView, NSDraggingSource {
     private let stitchBottom = CALayer()
     private let stitchTopPhoto = CALayer()
     private let stitchBottomPhoto = CALayer()
+    private var stitchTopTexture: RopeStitchJelly.Texture?
+    private var stitchBottomTexture: RopeStitchJelly.Texture?
+    private let stitchTopFlow = CALayer()
+    private let stitchBottomFlow = CALayer()
     private let stitchMerged = CALayer()
+    private let stitchTopPhotoClip = CAShapeLayer()
+    private let stitchBottomPhotoClip = CAShapeLayer()
     private let stitchTopMask = CAShapeLayer()
     private let stitchBottomMask = CAShapeLayer()
     private var stitchContact = Spring(0, response: 0.3, damping: 0.72)
@@ -1027,6 +1033,11 @@ final class RopeView: NSView, NSDraggingSource {
             photo.masksToBounds = true
             body.addSublayer(photo)
             stitchLayer.addSublayer(body)
+        }
+        for (body, flow) in [(stitchTop, stitchTopFlow), (stitchBottom, stitchBottomFlow)] {
+            flow.contentsGravity = .resize
+            flow.contentsScale = 2
+            body.addSublayer(flow)
         }
         stitchTop.mask = stitchTopMask
         stitchBottom.mask = stitchBottomMask
@@ -1587,37 +1598,60 @@ final class RopeView: NSView, NSDraggingSource {
             let bottom = RopeStitchJelly.mix(isCommittingStitch ? second : attached, finalBottom, merge)
             stitchDisplayedTop = top
             stitchDisplayedBottom = bottom
-            // The bodies stay rectangular. Bend only their facing edges, with no whole-photo squash.
-            let radius = 3 + 7 * proximity * (1 - merge)
+            // The actual photo pixels in a narrow edge band flow with the surfaces.
+            // Everything farther from the seam stays rigid and rectangular.
+            let surface = RopeStitchJelly.melt(top: top, bottom: bottom, strength: proximity * (1 - merge))
             let joined = reduced ? merge : min(max((merge - 0.72) / 0.28, 0), 1)
             let shadow = CGMutablePath()
-            for (body, photo, mask, frame, upper) in [(stitchTop, stitchTopPhoto, stitchTopMask, top, true),
-                                                       (stitchBottom, stitchBottomPhoto, stitchBottomMask, bottom, false)] {
+            for (body, photo, mask, clip, flow, frame, upper) in [(stitchTop, stitchTopPhoto, stitchTopMask, stitchTopPhotoClip, stitchTopFlow, top, true),
+                                                                     (stitchBottom, stitchBottomPhoto, stitchBottomMask, stitchBottomPhotoClip, stitchBottomFlow, bottom, false)] {
+                let extent = surface.extent
                 body.transform = CATransform3DIdentity
-                body.frame = frame
+                body.frame = CGRect(x: frame.minX, y: frame.minY - (upper ? 0 : extent),
+                                    width: frame.width, height: frame.height + extent)
                 body.cornerRadius = 0
                 body.opacity = Float(1 - joined)
+                let shape = surface.path(upper: upper)
+                var toBody = CGAffineTransform(translationX: -body.frame.minX, y: -body.frame.minY)
                 mask.frame = body.bounds
-                mask.path = RopeStitchJelly.bodyPath(in: body.bounds, seamAtBottom: upper, radius: radius)
+                mask.path = shape.copy(using: &toBody)
                 let padding = 3 * (1 - merge)
-                let seamPadding = padding * (1 - proximity)
-                photo.frame = CGRect(x: padding, y: upper ? padding : seamPadding,
+                let seamPadding = padding * max(0, 1 - proximity / 0.45)
+                photo.frame = CGRect(x: padding, y: (upper ? padding : extent + seamPadding),
                                      width: max(0, frame.width - 2 * padding),
                                      height: max(0, frame.height - padding - seamPadding))
-                photo.cornerRadius = 0 // the shared edge mask clips the image locally as well
-                shadow.addPath(RopeStitchJelly.bodyPath(in: frame, seamAtBottom: upper, radius: radius))
+                photo.cornerRadius = 0
+                renderStitchFlow(flow, photo: photo, clip: clip, body: body, texture: upper ? stitchTopTexture : stitchBottomTexture, surface: surface, upper: upper)
+                shadow.addPath(shape)
             }
-            let bridge = RopeStitchJelly.bridge(top, bottom, strength: proximity * (1 - merge))
-            stitchBridge.path = bridge
+            // A single shared silhouette and shadow; the warped photo bands fill its connecting neck.
+            stitchBridge.path = surface.isFacing ? shadow : nil
             stitchBridge.opacity = Float(1 - joined)
             stitchMerged.frame = CGRect(origin: .zero, size: stitchSize)
             stitchMerged.opacity = Float(joined)
-            if let bridge { shadow.addPath(bridge) }
             stitchLayer.shadowPath = shadow
             stitchHint.position = CGPoint(x: x, y: origin.y + max(top.maxY, bottom.maxY) + 18)
         }
         if let window, abs(window.alphaValue - fade.value) > 0.001 { window.alphaValue = fade.value }
         CATransaction.commit()
+    }
+
+    private func renderStitchFlow(_ flow: CALayer, photo: CALayer, clip: CAShapeLayer, body: CALayer,
+                                  texture: RopeStitchJelly.Texture?, surface: RopeStitchJelly.Melt, upper: Bool) {
+        guard let band = texture?.band(photo: photo.frame, bodyOrigin: body.frame.origin, surface: surface,
+                                       upper: upper, scale: window?.backingScaleFactor ?? 2) else {
+            flow.isHidden = true
+            photo.mask = nil
+            return
+        }
+        let depth = min(28, photo.bounds.height * 0.28)
+        clip.frame = photo.bounds
+        clip.path = CGPath(rect: CGRect(x: 0, y: upper ? 0 : depth,
+                                       width: photo.bounds.width, height: photo.bounds.height - depth), transform: nil)
+        photo.mask = clip // far region and warped edge never draw the same translucent pixel twice
+        flow.isHidden = false
+        flow.frame = band.frame
+        flow.contents = band.image
     }
 
     /// Only catch the mouse where it matters, so the strip doesn't block the windows below.
@@ -2140,6 +2174,8 @@ final class RopeView: NSView, NSDraggingSource {
             stitchPointerX.snap(pointer.x)
             stitchPointerY.snap(pointer.y)
             stitchJelly.snap(0)
+            stitchTopTexture = RopeStitchJelly.Texture(top)
+            stitchBottomTexture = RopeStitchJelly.Texture(bottom)
             stitchTopPhoto.contents = top
             stitchBottomPhoto.contents = bottom
             stitchSize = RopeTuning.printSize(aspect: CGFloat(image.width) / CGFloat(image.height))
